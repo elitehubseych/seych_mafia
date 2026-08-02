@@ -150,6 +150,21 @@ class VKAPI:
                 return bool(item.get("is_admin")) or item.get("role") in {"admin", "creator"}
         return False
 
+    async def get_chat_title(self, peer_id: int) -> str | None:
+        resp = await self.call("messages.getConversationsById", peer_ids=str(peer_id))
+        if not resp:
+            return None
+        items = resp.get("items")
+        if not items:
+            return None
+        conv = items[0]
+        chat_settings = conv.get("chat_settings") or {}
+        title = chat_settings.get("title")
+        if title:
+            return title
+        peer = conv.get("peer") or {}
+        return peer.get("local_id") and f"чат {peer.get('local_id')}"
+
     async def get_user_name(self, user_id: int) -> str:
         if user_id in self._names:
             return self._names[user_id]
