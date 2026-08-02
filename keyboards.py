@@ -104,6 +104,23 @@ def bot_dm_kb() -> dict:
     }
 
 
+def inline_link_kb(label: str, url: str) -> dict:
+    return {
+        "inline": True,
+        "buttons": [
+            [
+                {
+                    "action": {
+                        "type": "open_link",
+                        "label": label,
+                        "link": url,
+                    }
+                }
+            ]
+        ],
+    }
+
+
 def lynch_confirm_kb(likes: int, dislikes: int) -> dict:
     return {
         "inline": True,
