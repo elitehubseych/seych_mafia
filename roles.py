@@ -13,6 +13,7 @@ class Role(str, Enum):
     LAWYER = "lawyer"
     KAMIKAZE = "kamikaze"
     DOCTOR = "doctor"
+    MANIAC = "maniac"
 
 
 ROLE_RU = {
@@ -25,6 +26,7 @@ ROLE_RU = {
     Role.LAWYER: "Адвокат",
     Role.KAMIKAZE: "Камикадзе",
     Role.DOCTOR: "Доктор",
+    Role.MANIAC: "Маньяк",
 }
 
 ROLE_EMOJI = {
@@ -37,6 +39,7 @@ ROLE_EMOJI = {
     Role.LAWYER: "⚖️",
     Role.KAMIKAZE: "💥",
     Role.DOCTOR: "🩺",
+    Role.MANIAC: "🔪",
 }
 
 MAFIA_SIDE = {Role.DON, Role.MAFIA}
@@ -53,7 +56,7 @@ ROLE_CONFIG: dict[int, dict[Role, int]] = {
     12: {Role.DON: 1, Role.MAFIA: 3, Role.COMMISSAR: 1, Role.DOCTOR: 1, Role.MISTRESS: 1, Role.CITIZEN: 5},
     13: {Role.DON: 1, Role.MAFIA: 4, Role.COMMISSAR: 1, Role.DOCTOR: 1, Role.MISTRESS: 1, Role.CITIZEN: 5},
     14: {Role.DON: 1, Role.MAFIA: 4, Role.COMMISSAR: 1, Role.DOCTOR: 1, Role.MISTRESS: 1, Role.LAWYER: 1, Role.CITIZEN: 5},
-    15: {Role.DON: 1, Role.MAFIA: 4, Role.COMMISSAR: 1, Role.DOCTOR: 1, Role.MISTRESS: 1, Role.LAWYER: 1, Role.SERGEANT: 1, Role.KAMIKAZE: 1, Role.CITIZEN: 4},
+    15: {Role.DON: 1, Role.MAFIA: 4, Role.COMMISSAR: 1, Role.DOCTOR: 1, Role.MISTRESS: 1, Role.LAWYER: 1, Role.SERGEANT: 1, Role.KAMIKAZE: 1, Role.MANIAC: 1, Role.CITIZEN: 3},
 }
 
 
