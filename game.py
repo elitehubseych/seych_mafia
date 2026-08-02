@@ -34,6 +34,7 @@ NIGHT_ORDER = [
     Role.COMMISSAR,
     Role.LAWYER,
     Role.MISTRESS,
+    Role.MANIAC,
     Role.MAFIA,
     Role.DON,
 ]
@@ -93,7 +94,7 @@ class Game:
         parts = []
         for role in (
             Role.DON, Role.MAFIA, Role.LAWYER, Role.COMMISSAR, Role.SERGEANT,
-            Role.DOCTOR, Role.MISTRESS, Role.KAMIKAZE, Role.CITIZEN,
+            Role.DOCTOR, Role.MISTRESS, Role.KAMIKAZE, Role.MANIAC, Role.CITIZEN,
         ):
             if cnt.get(role):
                 parts.append(
@@ -166,7 +167,10 @@ class Game:
             await self.start_game()
         else:
             await self.broadcast(
-                f"⏱️ Время регистрации вышло. Нужно минимум {MIN_PLAYERS} игроков. Игра отменена."
+                "Увы, для игры в мафию нужно минимум 4 человека, а вас: "
+                f"{len(self.players)}\n"
+                "P.S.: Попробуйте отметить всех, чтобы созвать поиграть, "
+                "но помните, за использование all ночью администрация может выдать наказание."
             )
             self.state = "ended"
 
@@ -273,6 +277,12 @@ class Game:
                 "Когда тебя убивают ночью, ты взрываешься и забираешь убийцу с собой.\n"
                 "Умри достойно — враг упадёт вместе с тобой!"
             )
+        elif role == Role.MANIAC:
+            text = (
+                f"{emoji} Ты Маньяк!\n"
+                "Ночью ты выбираешь одну жертву и хочешь остаться единственным выжившим.\n"
+                "Убей тех, кто мешает твоей охоте, и выживай любой ценой!"
+            )
         else:
             text = (
                 f"{emoji} Ты Мирный житель!\n"
@@ -361,6 +371,15 @@ class Game:
                 alive, skip_label=CHAT_ACTIONS[Role.LAWYER][1], page=page
             )
             text = "⚖️ Ты адвокат!\nКого защитим от проверки коммисара?"
+        elif role == Role.MANIAC:
+            exclude = {player.user_id}
+            kb = players_kb(
+                alive,
+                exclude=exclude,
+                skip_label="💀 Маньяк пропускает ход",
+                page=page,
+            )
+            text = "🗡️ Ты маньяк!\nКого убиваем сегодня ночью?"
         elif role in (Role.DON, Role.MAFIA):
             exclude = {player.user_id}
             for q in alive:
@@ -521,6 +540,8 @@ class Game:
                 await self.broadcast(CHAT_ACTIONS[Role.COMMISSAR][1])
         elif role in CHAT_ACTIONS:
             await self.broadcast(CHAT_ACTIONS[role][0] if target_uid else CHAT_ACTIONS[role][1])
+        elif role == Role.MANIAC:
+            pass
         if role == Role.MISTRESS and target_uid:
             self.mistress_visit = target_uid
 
@@ -684,11 +705,13 @@ class Game:
         commissar = next((p for p in alive if p.role == Role.COMMISSAR), None)
         doctor = next((p for p in alive if p.role == Role.DOCTOR), None)
         mistress = next((p for p in alive if p.role == Role.MISTRESS), None)
+        maniac = next((p for p in alive if p.role == Role.MANIAC), None)
 
         don_act = act.get(don.user_id) if don else None
         com_act = act.get(commissar.user_id) if commissar else None
         doc_act = act.get(doctor.user_id) if doctor else None
         mis_act = act.get(mistress.user_id) if mistress else None
+        mani_act = act.get(maniac.user_id) if maniac else None
 
         mafia_votes = [a.target for m in mafias if (a := act.get(m.user_id)) and a.target]
         unanimous = None
@@ -715,6 +738,7 @@ class Game:
         if com_act and com_act.mode == "check" and com_act.target and not mistress_blocks_com:
             com_check = com_act.target
 
+        mani_target = mani_act.target if mani_act else None
         heal = doc_act.target if doc_act else None
 
         hits: dict[int, list[str]] = {}
@@ -722,13 +746,14 @@ class Game:
             hits.setdefault(kill_target, []).append("mafia")
         if com_target:
             hits.setdefault(com_target, []).append("com")
+        if mani_target:
+            hits.setdefault(mani_target, []).append("maniac")
 
         logger.info("resolve_night: night=%d hits=%s heal=%s", self.night_number, hits, heal)
         morning = []
         for uid, kinds in hits.items():
             p = self.players[uid]
             if heal == uid:
-                morning.append(f"🛡️ {self._link(p)} был(а) в опасности, но доктор вылечил его!")
                 await self.say(uid, "🛡️ Тебя убили, но доктор вылечил тебя!")
                 continue
             p.alive = False
@@ -773,6 +798,8 @@ class Game:
                     killer_roles.append(f"{ROLE_EMOJI[Role.DON]} {ROLE_RU[Role.DON]}")
                 if "com" in kinds:
                     killer_roles.append(f"{ROLE_EMOJI[Role.COMMISSAR]} {ROLE_RU[Role.COMMISSAR]}")
+                if "maniac" in kinds:
+                    killer_roles.append(f"{ROLE_EMOJI[Role.MANIAC]} {ROLE_RU[Role.MANIAC]}")
                 killer_txt = (
                     f"\nГоворят, у него в гостях был: {', '.join(killer_roles)}"
                     if killer_roles else ""
@@ -863,8 +890,7 @@ class Game:
         self.day_open = True
         eligible = [p for p in self.alive_players if not p.blocked_vote]
         logger.info("start_day: sending vote prompts to %d eligible players", len(eligible))
-        for p in eligible:
-            await self.send_vote_prompt(p)
+        await asyncio.gather(*(self.send_vote_prompt(p) for p in eligible), return_exceptions=True)
         await self.broadcast(
             f"🗳️ Началось дневное голосование! Одна минута.\nЖивых: {len(self.alive_players)}"
         )
@@ -957,12 +983,19 @@ class Game:
 
     def _confirm_ready(self) -> bool:
         eligible = [p for p in self.alive_players if not p.blocked_vote]
-        if not eligible:
+        remaining = [
+            p for p in eligible
+            if p.user_id not in self.confirm_likes and p.user_id not in self.confirm_dislikes
+        ]
+        likes = len(self.confirm_likes)
+        dislikes = len(self.confirm_dislikes)
+        if not remaining:
             return True
-        return all(
-            p.user_id in self.confirm_likes or p.user_id in self.confirm_dislikes
-            for p in eligible
-        )
+        if likes > dislikes + len(remaining):
+            return True
+        if dislikes > likes + len(remaining):
+            return True
+        return False
 
     async def submit_confirm(self, uid: int, vote: str) -> bool:
         if self.state != "confirm":
@@ -1042,10 +1075,12 @@ class Game:
     def endgame_status(self) -> str | None:
         alive = self.alive_players
         mafia = sum(1 for p in alive if p.role in MAFIA_SIDE)
-        town = len(alive) - mafia
-        if mafia == 0:
+        maniac = sum(1 for p in alive if p.role == Role.MANIAC)
+        if mafia == 0 and maniac == 0:
             return "town"
-        if town <= 1:
+        if mafia == 0 and maniac == 1 and len(alive) == 1:
+            return "maniac"
+        if mafia > 0 and maniac == 0 and len(alive) - mafia <= 1:
             return "mafia"
         return None
 
@@ -1057,6 +1092,8 @@ class Game:
             win_line = f"🎉 {ROLE_EMOJI[Role.MAFIA]} Мафия победила!"
         elif winner == "town":
             win_line = f"🎉 {ROLE_EMOJI[Role.CITIZEN]} Город победил! Мирные жители выиграли!"
+        elif winner == "maniac":
+            win_line = f"🎉 {ROLE_EMOJI[Role.MANIAC]} Маньяк победил! Он остался последним выжившим."
         else:
             win_line = "⏹️ Игра остановлена администратором."
         lines = [
