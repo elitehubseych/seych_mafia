@@ -112,11 +112,17 @@ async def cmd_start_group(
 
     game = Game(peer_id, vk)
     manager.games[peer_id] = game
+    reg_seconds = config.REGISTRATION_SECONDS
+    minutes = reg_seconds // 60
+    seconds = reg_seconds % 60
+    duration_text = (
+        f"{minutes} минут {seconds} секунд" if seconds else f"{minutes} минут"
+    )
     lines = [
         "🎭 Регистрация в игру Мафия!",
         "",
         f"Участников: 0/{config.MAX_PLAYERS} (минимум {config.MIN_PLAYERS})",
-        f"⏱️ Регистрация займёт {config.REGISTRATION_SECONDS // 60} минут или начнётся сразу при заполнении.",
+        f"⏱️ Регистрация займёт {duration_text} или начнётся сразу при заполнении.",
         "",
         "Чтобы присоединиться, нажми кнопку ниже. "
         "Сначала напиши боту в личные сообщения — иначе он не сможет отправлять тебе роли.",
