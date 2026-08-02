@@ -329,6 +329,12 @@ async def event_join(
     name = await display_name(vk, user_id)
     manager.register(user_id)
     if game.add_player(user_id, name):
+        chat_title = await vk.get_chat_title(peer_id) or "этом чате"
+        await vk.send(
+            user_id,
+            f"✅ Ты присоединился к игре Мафия, в чате {chat_title}",
+            keyboard=bot_dm_kb(),
+        )
         await game.broadcast(f"➕ [id{user_id}|{name}] присоединился к игре.")
         await game.update_registration_message()
     if len(game.players) >= config.MAX_PLAYERS:
