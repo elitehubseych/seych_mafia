@@ -28,7 +28,10 @@ CHAT_ACTIONS = {
         f"{ROLE_EMOJI[Role.MANIAC]} Маньяк засел в кустах.",
         f"{ROLE_EMOJI[Role.MANIAC]} Маньяк сегодня не охотится.",
     ),
-    Role.DON: (f"{ROLE_EMOJI[Role.DON]} Мафия выбрала жертву.", "😤 Дон не хочет ничего решать."),
+    Role.DON: (
+        f"{ROLE_EMOJI[Role.MAFIA]} Мафия выбрала жертву.",
+        f"{ROLE_EMOJI[Role.DON]} Дон не хочет ничего решать.",
+    ),
 }
 
 SHOOT_MESSAGE = "🔫 Коммисар зарядил пистолет."
@@ -314,6 +317,7 @@ class Game:
             p.blocked_vote = False
 
         alive = self.alive_players
+        await self._promote_don_if_needed()
         lines = [
             f"🌙 Ночь {self.night_number}. Город засыпает.",
             f"⏳ На ночь даётся {NIGHT_SECONDS} секунд.",
@@ -343,6 +347,18 @@ class Game:
         self._night_timer = asyncio.create_task(self._night_timeout())
         if self.bot_players:
             self._bots_task = asyncio.create_task(self._run_bots_phase())
+
+    async def _promote_don_if_needed(self) -> None:
+        alive = self.alive_players
+        don = next((p for p in alive if p.role == Role.DON), None)
+        mafias = [p for p in alive if p.role == Role.MAFIA]
+        if don is not None or not mafias:
+            return
+        new_don = random.choice(mafias)
+        new_don.role = Role.DON
+        await self._mafia_chat(
+            f"{ROLE_EMOJI[Role.DON]} {self._link(new_don)} теперь новый дон."
+        )
 
     def _build_night_groups(self) -> list[tuple[Role, list[int]]]:
         com_uid = self.alive_commissar_uid()
@@ -401,10 +417,10 @@ class Game:
             kb = players_kb(
                 alive,
                 exclude=exclude,
-                skip_label="💀 Маньяк пропускает ход",
+                skip_label=f"{ROLE_EMOJI[Role.MANIAC]} Маньяк пропускает ход",
                 page=page,
             )
-            text = "🗡️ Ты маньяк!\nКого убиваем сегодня ночью?"
+            text = f"{ROLE_EMOJI[Role.MANIAC]} Ты маньяк!\nКого убиваем сегодня ночью?"
         elif role == Role.KAMIKAZE:
             kb = players_kb(
                 alive,
@@ -424,13 +440,23 @@ class Game:
             kb = players_kb(
                 alive,
                 exclude=exclude,
-                skip_label=CHAT_ACTIONS[Role.DON][1] if role == Role.DON else "Мафия пропускает ход",
+                skip_label=(
+                    CHAT_ACTIONS[Role.DON][1]
+                    if role == Role.DON
+                    else f"{ROLE_EMOJI[Role.MAFIA]} Мафия пропускает ход"
+                ),
                 page=page,
             )
             if role == Role.DON:
-                text = "🗡️ Ты дон!\nКого убираем сегодня ночью?"
+                text = (
+                    f"{ROLE_EMOJI[Role.DON]} Ты дон!\n"
+                    "Пришло время голосовать — кого приводим в жертву?"
+                )
             else:
-                text = "🗡️ Ты мафия!\nЗа кого голосуешь?"
+                text = (
+                    f"{ROLE_EMOJI[Role.MAFIA]} Ты мафия!\n"
+                    "Пришло время голосовать — кого приводим в жертву?"
+                )
         else:
             return
         self.night.awaiting_target[player.user_id] = role
@@ -555,17 +581,21 @@ class Game:
         if role == Role.DON:
             if target_uid:
                 t = self._p(target_uid)
-                await self._mafia_chat(f"🗳️ Дон выбрал: {self._link(t) if t else '—'}")
+                await self._mafia_chat(
+                    f"🗳️ {ROLE_EMOJI[Role.DON]} Дон выбрал: {self._link(t) if t else '—'}"
+                )
             else:
-                await self._mafia_chat("⏭️ Дон пропускает ход.")
+                await self._mafia_chat(f"⏭️ {ROLE_EMOJI[Role.DON]} Дон пропускает ход.")
         elif role == Role.MAFIA:
             if target_uid:
                 t = self._p(target_uid)
                 await self._mafia_chat(
-                    f"🗳️ {who} (мафия) проголосовал: {self._link(t) if t else '—'}"
+                    f"🗳️ {who} ({ROLE_EMOJI[Role.MAFIA]} мафия) проголосовал: {self._link(t) if t else '—'}"
                 )
             else:
-                await self._mafia_chat(f"⏭️ {who} (мафия) пропускает ход.")
+                await self._mafia_chat(
+                    f"⏭️ {who} ({ROLE_EMOJI[Role.MAFIA]} мафия) пропускает ход."
+                )
         elif role == Role.COMMISSAR:
             if target_uid:
                 if mode == "shoot":
@@ -741,31 +771,33 @@ class Game:
                 kam_act = a
                 break
 
-        mafia_votes = [a.target for m in mafias if (a := act.get(m.user_id)) and a.target]
-        unanimous = None
-        if mafias and len(mafia_votes) == len(mafias) and len(set(mafia_votes)) == 1:
-            unanimous = mafia_votes[0]
+        mafia_choices = [a.target for m in mafias if (a := act.get(m.user_id)) and a.target]
+        mafia_target = mafia_choices[0] if mafia_choices and len(set(mafia_choices)) == 1 else None
+        mafia_all_voted = bool(mafias) and len(mafia_choices) == len(mafias)
 
         don_target = don_act.target if don_act else None
         mistress_blocks_don = bool(mis_act and mis_act.target == (don.user_id if don else None))
         mistress_blocks_com = bool(mis_act and mis_act.target == (commissar.user_id if commissar else None))
 
         kill_target = None
-        if don is None:
-            kill_target = unanimous
-        elif not mistress_blocks_don:
+        if not mistress_blocks_don:
             if don_target is not None:
-                if unanimous is not None and unanimous != don_target and len(mafias) >= 4:
-                    kill_target = unanimous
+                if (
+                    mafia_all_voted
+                    and mafia_target is not None
+                    and mafia_target != don_target
+                    and len(mafias) >= 4
+                ):
+                    kill_target = mafia_target
                 else:
                     kill_target = don_target
             else:
-                kill_target = unanimous
+                kill_target = mafia_target
 
-        if don and don_act is not None and not don_act.target:
-            await self.broadcast("😤 Дон не хочет ничего решать.")
         if kill_target:
-            await self.broadcast(f"{ROLE_EMOJI[Role.DON]} Мафия выбрала жертву.")
+            await self.broadcast(CHAT_ACTIONS[Role.DON][0])
+        elif not mistress_blocks_don:
+            await self.broadcast(CHAT_ACTIONS[Role.DON][1])
 
         com_target = None
         if com_act and com_act.mode == "shoot" and com_act.target and not mistress_blocks_com:

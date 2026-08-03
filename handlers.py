@@ -26,12 +26,12 @@ def _player_link(game: Game, uid: int) -> str:
 
 async def _confirm_event_message(vk: VKAPI, obj: dict, text: str) -> None:
     peer_id = obj.get("peer_id")
-    msg_id = obj.get("conversation_message_id")
+    msg_id = obj.get("conversation_message_id") or obj.get("message_id")
     if not peer_id or not msg_id:
-        logger.warning("message_event without peer_id/conversation_message_id: %s", obj)
+        logger.warning("message_event without peer_id/message_id: %s", obj)
         return
     try:
-        await vk.edit(peer_id, msg_id, text, keyboard="")
+        await vk.edit(peer_id, msg_id, text, keyboard={"buttons": []})
     except Exception:  # noqa: BLE001
         logger.warning("edit event message failed", exc_info=True)
 
@@ -304,6 +304,8 @@ async def handle_message_event(vk: VKAPI, obj: dict) -> None:
             return
         ok = await game.submit_confirm(user_id, vote)
         await vk.answer_event(event_id, user_id, peer_id, "✅ Засчитано" if ok else "⛔ Ты уже голосовал")
+        if ok:
+            await _confirm_event_message(vk, obj, "✅ Твой голос учтён.")
 
 
 async def event_join(

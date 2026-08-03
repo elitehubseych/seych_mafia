@@ -209,7 +209,7 @@ async def test_maniac_kills_target():
 async def test_maniac_system_message():
     g = make_game({
         1000: Role.MANIAC, 1001: Role.CITIZEN, 1002: Role.CITIZEN,
-        1003: Role.MAFIA, 1004: Role.COMMISSAR, 1005: Role.DOCTOR,
+        1003: Role.DON, 1004: Role.COMMISSAR, 1005: Role.DOCTOR,
         1006: Role.MISTRESS, 1007: Role.LAWYER, 1008: Role.CITIZEN,
         1009: Role.CITIZEN,
     })
@@ -219,7 +219,7 @@ async def test_maniac_system_message():
             role = g.night.awaiting_target[uid]
             if role == Role.MANIAC:
                 await g.submit_target(uid, 1001)
-            elif role == Role.MAFIA:
+            elif role == Role.DON:
                 await g.submit_target(uid, 1002)
             else:
                 await g.submit_skip(uid)
@@ -357,8 +357,8 @@ async def test_mafia_decision_messages():
         1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
     })
     m = "\n".join(chat_msgs(g))
-    assert "😤 Дон не хочет ничего решать." in m, m
-    assert "🤵🏻 Мафия выбрала жертву" not in m, "без решения мафии сообщение о жертве не пишется"
+    assert "🤵🏻 Дон не хочет ничего решать." in m, m
+    assert "🤵🏼 Мафия выбрала жертву" not in m, "без решения мафии сообщение о жертве не пишется"
     assert g.players[1007].alive and g.players[1008].alive
 
     g2 = make_game({
@@ -373,9 +373,79 @@ async def test_mafia_decision_messages():
         1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
     })
     m2 = "\n".join(chat_msgs(g2))
-    assert "🤵🏻 Мафия выбрала жертву" in m2, m2
+    assert "🤵🏼 Мафия выбрала жертву" in m2, m2
     assert "🗡️ Мафия выбрала жертву" not in m2, "эмодзи кинжала заменён на эмодзи человека"
     print("test_mafia_decision_messages OK")
+
+
+async def test_don_transfer_to_random_mafia():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS, 1006: Role.LAWYER,
+        1002: Role.CITIZEN, 1007: Role.CITIZEN, 1008: Role.CITIZEN, 1009: Role.CITIZEN,
+    })
+    g.players[1000].alive = False  # дон убит ночью
+    await night_flow(g, {
+        1001: ("target", 1007),  # бывшая мафия теперь дон
+        1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
+    })
+    assert g.players[1001].role == Role.DON, "роль дона передаётся живому мафиози"
+    assert not g.players[1007].alive, "решение нового дона определяет убийство"
+    dm = "\n".join(dm_msgs(g, 1001))
+    assert "теперь новый дон." in dm, dm
+    m = "\n".join(chat_msgs(g))
+    assert "теперь новый дон." not in m, "о передаче дона знает только мафия"
+    print("test_don_transfer_to_random_mafia OK")
+
+
+async def test_don_afk_single_mafia_choice_counts():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS, 1006: Role.LAWYER,
+        1007: Role.CITIZEN, 1008: Role.CITIZEN, 1009: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",),  # дон афк
+        1001: ("target", 1007),  # одна мафия выбрала
+        1002: ("skip",),  # вторая промолчала
+        1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
+    })
+    assert not g.players[1007].alive, "дон не выбрал — голос идёт мафии, которая выбрала"
+    m = "\n".join(chat_msgs(g))
+    assert "🤵🏻 Дон не хочет ничего решать." not in m, "убийство состоялось — сообщение не нужно"
+    print("test_don_afk_single_mafia_choice_counts OK")
+
+
+async def test_mafia_skip_triggers_don_message():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS, 1006: Role.LAWYER,
+        1007: Role.CITIZEN, 1008: Role.CITIZEN, 1009: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",), 1001: ("skip",), 1002: ("skip",),
+        1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
+    })
+    m = "\n".join(chat_msgs(g))
+    assert "🤵🏻 Дон не хочет ничего решать." in m, m
+    assert "🤵🏼 Мафия выбрала жертву" not in m, "никто не убит — сообщения о жертве нет"
+    print("test_mafia_skip_triggers_don_message OK")
+
+
+async def test_don_and_one_mafia_don_decides():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS, 1006: Role.LAWYER,
+        1002: Role.CITIZEN, 1007: Role.CITIZEN, 1008: Role.CITIZEN, 1009: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("target", 1007),  # дон хочет 1007
+        1001: ("target", 1008),  # единственная мафия — 1008
+        1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
+    })
+    assert not g.players[1007].alive, "дон и одна мафия — решает дон"
+    assert g.players[1008].alive, "одна мафия не перебивает выбор дона"
+    print("test_don_and_one_mafia_don_decides OK")
 
 
 async def test_commissar_shoot():
@@ -911,6 +981,10 @@ async def main():
     await test_don_skip_mafia_unanimous_kills()
     await test_don_skip_mafia_split_no_kill()
     await test_mafia_decision_messages()
+    await test_don_transfer_to_random_mafia()
+    await test_don_afk_single_mafia_choice_counts()
+    await test_mafia_skip_triggers_don_message()
+    await test_don_and_one_mafia_don_decides()
     await test_commissar_shoot()
     await test_day_lynch()
     await test_1v1_endgame()
