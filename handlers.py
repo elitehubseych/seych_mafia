@@ -154,7 +154,7 @@ async def cmd_startbot(
         await vk.send(peer_id, "⛔ Только для админов чата.")
         return
     if not game or game.state != "waiting":
-        await vk.send(peer_id, "Сейчас нет игры в режиме регистрации.")
+        await vk.send(peer_id, "ℹ️ Сейчас нет игры в режиме регистрации.")
         return
     added = game.fill_with_bots(config.MAX_PLAYERS)
     await vk.send(
@@ -244,7 +244,7 @@ async def handle_message_event(vk: VKAPI, obj: dict) -> None:
     if action == "cmode":
         mode = payload.get("m")
         ok = mode in {"check", "shoot"} and game.check_mode(user_id, mode)
-        await vk.answer_event(event_id, user_id, peer_id, "Действие выбрано" if ok else "⛔ Нельзя сейчас")
+        await vk.answer_event(event_id, user_id, peer_id, "✅ Действие выбрано" if ok else "⛔ Нельзя сейчас")
         if ok:
             await game.submit_mode(user_id, mode)
             text = "✅ Режим: 🔍 Проверить роль" if mode == "check" else "✅ Режим: 🔫 Выстрелить"

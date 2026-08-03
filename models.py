@@ -15,6 +15,9 @@ class Player:
     self_healed: bool = False
     blocked_vote: bool = False
     is_bot: bool = False
+    lynched: bool = False
+    kamikaze_used: bool = False
+    missed_nights: int = 0
 
 
 @dataclass

@@ -20,11 +20,15 @@ from vk_api import VKAPI
 logger = logging.getLogger(__name__)
 
 CHAT_ACTIONS = {
-    Role.DOCTOR: ("🩺 Доктор вышел на ночное дежурство.", "Доктор сегодня остается дома."),
-    Role.COMMISSAR: ("🕵️ Коммисар ушел искать злодеев.", "Коммисар сегодня спит."),
-    Role.LAWYER: ("⚖️ Адвокат ушел искать мафию для защиты.", "Адвокат не хочет работать."),
-    Role.MISTRESS: ("💋 Любовница уже ждет кого-то в гости.", "Любовница завязала со своим прошлым."),
-    Role.DON: ("🗡️ Мафия выбрала жертву.", "Дон не хочет ничего решать."),
+    Role.DOCTOR: ("🩺 Доктор вышел на ночное дежурство.", "🩺 Доктор сегодня остаётся дома."),
+    Role.COMMISSAR: ("🕵️ Коммисар ушёл искать злодеев.", "🕵️ Коммисар сегодня спит."),
+    Role.LAWYER: ("⚖️ Адвокат ушёл искать мафию для защиты.", "⚖️ Адвокат не хочет работать."),
+    Role.MISTRESS: ("💋 Любовница уже ждёт кого-то в гости.", "💋 Любовница завязала со своим прошлым."),
+    Role.MANIAC: (
+        f"{ROLE_EMOJI[Role.MANIAC]} Маньяк засел в кустах.",
+        f"{ROLE_EMOJI[Role.MANIAC]} Маньяк сегодня не охотится.",
+    ),
+    Role.DON: (f"{ROLE_EMOJI[Role.DON]} Мафия выбрала жертву.", "😤 Дон не хочет ничего решать."),
 }
 
 SHOOT_MESSAGE = "🔫 Коммисар зарядил пистолет."
@@ -70,7 +74,6 @@ class Game:
         self._bots_task: asyncio.Task | None = None
         self._bot_ids: set[int] = set()
         self._night_groups: list[tuple[Role, list[int]]] = []
-        self._night_group_i = 0
         self.last_words_open: set[int] = set()
 
     # ------------------------------------------------------------------ utils
@@ -173,7 +176,7 @@ class Game:
             await self.start_game()
         else:
             await self.broadcast(
-                "Увы, для игры в мафию нужно минимум 4 человека, а вас: "
+                "😔 Увы, для игры в мафию нужно минимум 4 человека, а вас: "
                 f"{len(self.players)}\n"
                 "P.S.: Попробуйте отметить всех, чтобы созвать поиграть, "
                 "но помните, за использование all ночью администрация может выдать наказание."
@@ -281,6 +284,8 @@ class Game:
             text = (
                 f"{emoji} Ты Камикадзе!\n"
                 "Когда тебя убивают ночью, ты взрываешься и забираешь убийцу с собой.\n"
+                "А если город решит тебя повесить — в следующую ночь ты сможешь "
+                "забрать с собой в могилу любого игрока. Но только один раз за всю игру!\n"
                 "Умри достойно — враг упадёт вместе с тобой!"
             )
         elif role == Role.MANIAC:
@@ -311,6 +316,7 @@ class Game:
         alive = self.alive_players
         lines = [
             f"🌙 Ночь {self.night_number}. Город засыпает.",
+            f"⏳ На ночь даётся {NIGHT_SECONDS} секунд.",
             f"Живых: {len(alive)}",
         ]
         for p in alive:
@@ -320,11 +326,23 @@ class Game:
         await self.broadcast("\n".join(lines), keyboard=inline_link_kb("Посмотреть роль", config.VK_ME_LINK))
 
         self._night_groups = self._build_night_groups()
-        self._night_group_i = 0
         if not self._night_groups:
             await self.resolve_night()
             return
-        await self._prompt_night_group(0)
+
+        async def _prompt(uid: int, role: Role) -> None:
+            self.night.needed.add(uid)
+            await self.send_night_prompt(self.players[uid], role)
+            if role == Role.KAMIKAZE:
+                self.players[uid].kamikaze_used = True
+
+        await asyncio.gather(
+            *(_prompt(uid, role) for role, uids in self._night_groups for uid in uids),
+            return_exceptions=True,
+        )
+        self._night_timer = asyncio.create_task(self._night_timeout())
+        if self.bot_players:
+            self._bots_task = asyncio.create_task(self._run_bots_phase())
 
     def _build_night_groups(self) -> list[tuple[Role, list[int]]]:
         com_uid = self.alive_commissar_uid()
@@ -342,17 +360,15 @@ class Game:
                 members.append(p.user_id)
             if members:
                 groups.append((role, members))
+        for p in self.players.values():
+            if (
+                not p.alive
+                and p.role == Role.KAMIKAZE
+                and p.lynched
+                and not p.kamikaze_used
+            ):
+                groups.append((Role.KAMIKAZE, [p.user_id]))
         return groups
-
-    async def _prompt_night_group(self, i: int) -> None:
-        role, uids = self._night_groups[i]
-        for uid in uids:
-            self.night.needed.add(uid)
-            await self.send_night_prompt(self.players[uid], role)
-        self._night_timer = asyncio.create_task(self._night_group_timeout(i))
-        bots = [p for p in self.bot_players if p.alive and p.user_id in set(uids)]
-        if bots:
-            self._bots_task = asyncio.create_task(self._run_bots_phase(i))
 
     async def send_night_prompt(self, player: Player, role: Role, page: int = 0) -> None:
         alive = self.alive_players
@@ -389,6 +405,17 @@ class Game:
                 page=page,
             )
             text = "🗡️ Ты маньяк!\nКого убиваем сегодня ночью?"
+        elif role == Role.KAMIKAZE:
+            kb = players_kb(
+                alive,
+                exclude={player.user_id},
+                skip_label="😴 Камикадзе не будет мстить",
+                page=page,
+            )
+            text = (
+                "💥 Ты камикадзе, и город отправил тебя на тот свет!\n"
+                "Выбери, кого заберёшь с собой в могилу (только один раз за игру)."
+            )
         elif role in (Role.DON, Role.MAFIA):
             exclude = {player.user_id}
             for q in alive:
@@ -409,17 +436,14 @@ class Game:
         self.night.awaiting_target[player.user_id] = role
         await self.say(player.user_id, text, keyboard=kb)
 
-    async def _night_group_timeout(self, i: int) -> None:
+    async def _night_timeout(self) -> None:
         await asyncio.sleep(NIGHT_SECONDS)
         if self.state != "night":
             return
-        if self._night_group_i != i:
-            return
-        group = self._night_groups[i]
-        skipped = [uid for uid in group[1] if uid not in self.night.actions]
-        for uid in skipped:
-            await self.force_skip(uid)
-        await self._advance_night_group()
+        for uid in list(self.night.needed):
+            if uid not in self.night.actions:
+                await self.force_skip(uid)
+        await self.resolve_night()
 
     async def force_skip(self, uid: int) -> None:
         role = self.night.awaiting_target.pop(uid, None)
@@ -429,8 +453,8 @@ class Game:
             self.night.actions[uid] = Action(role=role, target=None)
             await self._broadcast_action(uid, role, None)
             p = self.players.get(uid)
-            if p and not p.is_bot:
-                await self.say(uid, "⏰ Время вышло — ты пропустил ход.")
+            if p and p.alive:
+                p.missed_nights += 1
 
     def _role_of_uid(self, uid: int) -> Role | None:
         p = self.players.get(uid)
@@ -510,8 +534,9 @@ class Game:
         self.night.awaiting_target.pop(uid, None)
         mode = self.night.commissar_mode.pop(uid, None) if role == Role.COMMISSAR else None
         self.night.actions[uid] = Action(role=role, target=target_uid, mode=mode)
+        self.players[uid].missed_nights = 0
         await self._broadcast_action(uid, role, target_uid, mode)
-        await self._maybe_advance_night_group()
+        await self._maybe_resolve()
         return True
 
     async def submit_skip(self, uid: int) -> bool:
@@ -519,18 +544,20 @@ class Game:
             return False
         role = self.night.awaiting_target.pop(uid)
         self.night.actions[uid] = Action(role=role, target=None)
+        self.players[uid].missed_nights = 0
         await self._broadcast_action(uid, role, None)
-        await self._maybe_advance_night_group()
+        await self._maybe_resolve()
         return True
 
     async def _broadcast_action(self, uid: int, role: Role, target_uid: int | None, mode: str | None = None) -> None:
         p = self._p(uid)
         who = self._link(p) if p else f"#{uid}"
         if role == Role.DON:
-            await self.broadcast(CHAT_ACTIONS[Role.DON][0] if target_uid else CHAT_ACTIONS[Role.DON][1])
             if target_uid:
                 t = self._p(target_uid)
                 await self._mafia_chat(f"🗳️ Дон выбрал: {self._link(t) if t else '—'}")
+            else:
+                await self._mafia_chat("⏭️ Дон пропускает ход.")
         elif role == Role.MAFIA:
             if target_uid:
                 t = self._p(target_uid)
@@ -582,40 +609,16 @@ class Game:
         await self.say(user_id, "✅ Твои последние слова переданы городу.")
         return True
 
-    async def _maybe_advance_night_group(self) -> None:
+    async def _maybe_resolve(self) -> None:
         if self.state != "night":
             return
-        if self._night_group_i >= len(self._night_groups):
-            return
-        group = self._night_groups[self._night_group_i]
-        if all(uid in self.night.actions for uid in group[1]):
-            await self._advance_night_group()
-
-    async def _advance_night_group(self) -> None:
-        if self.state != "night":
-            return
-        _cancel(self._night_timer)
-        self._night_timer = None
-        self._night_group_i += 1
-        try:
-            if self._night_group_i < len(self._night_groups):
-                await self._prompt_night_group(self._night_group_i)
-            else:
-                await self.resolve_night()
-        except Exception:  # noqa: BLE001
-            logger.exception("advance night group failed; resolving night")
-            try:
-                await self.resolve_night()
-            except Exception:  # noqa: BLE001
-                logger.exception("resolve_night failed after group advance")
-                await self.end_game("stop")
+        if all(uid in self.night.actions for uid in self.night.needed):
+            await self.resolve_night()
 
     # ------------------------------------------------------------------ bots
     async def _run_bots_phase(self, i: int | None = None) -> None:
-        if self.state == "night" and i is not None:
-            group = self._night_groups[i]
-            members = set(group[1])
-            bots = [p for p in self.bot_players if p.alive and p.user_id in members]
+        if self.state == "night":
+            bots = [p for p in self.bot_players if p.user_id in self.night.needed]
             await asyncio.gather(*(self._bot_night_solo(p) for p in bots))
         elif self.state == "voting":
             await asyncio.gather(
@@ -676,6 +679,13 @@ class Game:
             else:
                 await self.submit_skip(uid)
             return
+        if role == Role.KAMIKAZE:
+            targets = [q.user_id for q in self.alive_players if q.user_id != uid]
+            if targets:
+                await self.submit_target(uid, random.choice(targets))
+            else:
+                await self.submit_skip(uid)
+            return
         targets = [q.user_id for q in self.alive_players if q.user_id != uid]
         if role == Role.MISTRESS and self.last_mistress_visit:
             targets = [t for t in targets if t != self.last_mistress_visit]
@@ -688,6 +698,8 @@ class Game:
     async def resolve_night(self) -> None:
         if self.state != "night":
             return
+        _cancel(self._night_timer)
+        self._night_timer = None
         try:
             await asyncio.wait_for(self._resolve_night_inner(), timeout=PHASE_TIMEOUT)
         except asyncio.TimeoutError:
@@ -722,6 +734,13 @@ class Game:
         mis_act = act.get(mistress.user_id) if mistress else None
         mani_act = act.get(maniac.user_id) if maniac else None
 
+        kam_act = None
+        for uid, a in act.items():
+            p = self.players.get(uid)
+            if p and p.role == Role.KAMIKAZE and a.role == Role.KAMIKAZE and a.target:
+                kam_act = a
+                break
+
         mafia_votes = [a.target for m in mafias if (a := act.get(m.user_id)) and a.target]
         unanimous = None
         if mafias and len(mafia_votes) == len(mafias) and len(set(mafia_votes)) == 1:
@@ -732,13 +751,21 @@ class Game:
         mistress_blocks_com = bool(mis_act and mis_act.target == (commissar.user_id if commissar else None))
 
         kill_target = None
-        if don and not mistress_blocks_don:
-            if unanimous and unanimous != don_target:
-                kill_target = unanimous
-            else:
-                kill_target = don_target
-        elif don is None:
+        if don is None:
             kill_target = unanimous
+        elif not mistress_blocks_don:
+            if don_target is not None:
+                if unanimous is not None and unanimous != don_target and len(mafias) >= 4:
+                    kill_target = unanimous
+                else:
+                    kill_target = don_target
+            else:
+                kill_target = unanimous
+
+        if don and don_act is not None and not don_act.target:
+            await self.broadcast("😤 Дон не хочет ничего решать.")
+        if kill_target:
+            await self.broadcast(f"{ROLE_EMOJI[Role.DON]} Мафия выбрала жертву.")
 
         com_target = None
         if com_act and com_act.mode == "shoot" and com_act.target and not mistress_blocks_com:
@@ -749,6 +776,7 @@ class Game:
 
         mani_target = mani_act.target if mani_act else None
         heal = doc_act.target if doc_act else None
+        kam_target = kam_act.target if kam_act else None
 
         hits: dict[int, list[str]] = {}
         if kill_target:
@@ -757,13 +785,19 @@ class Game:
             hits.setdefault(com_target, []).append("com")
         if mani_target:
             hits.setdefault(mani_target, []).append("maniac")
+        if kam_target:
+            hits.setdefault(kam_target, []).append("kamikaze")
 
-        logger.info("resolve_night: night=%d hits=%s heal=%s", self.night_number, hits, heal)
+        logger.info(
+            "resolve_night: night=%d hits=%s heal=%s kam=%s", self.night_number, hits, heal, kam_target
+        )
         morning = []
+        doctor_saved: set[int] = set()
         for uid, kinds in hits.items():
             p = self.players[uid]
             if heal == uid:
-                await self.say(uid, "🛡️ Тебя убили, но доктор вылечил тебя!")
+                doctor_saved.add(uid)
+                await self.say(uid, "🛡️ Тебя убили, но доктор спас тебя!")
                 continue
             p.alive = False
             self.last_words_open.add(uid)
@@ -796,15 +830,15 @@ class Game:
 
                 guests = []
                 for killer in killers:
+                    role_txt = f"{ROLE_EMOJI[killer.role]} {ROLE_RU[killer.role]}"
                     if killer.alive:
                         if heal == killer.user_id:
+                            doctor_saved.add(killer.user_id)
                             await self.say(
                                 killer.user_id,
-                                "🛡️ Камикадзе взорвался рядом с тобой, но доктор вылечил тебя!",
+                                "🛡️ Камикадзе взорвался рядом с тобой, но доктор спас тебя!",
                             )
-                            guests.append(
-                                f"{ROLE_EMOJI[killer.role]} {ROLE_RU[killer.role]} (спасён доктором)"
-                            )
+                            guests.append(f"{role_txt} (спасён доктором)")
                         else:
                             killer.alive = False
                             if killer.user_id not in hits:
@@ -813,9 +847,15 @@ class Game:
                                     killer.user_id,
                                     "💥 Камикадзе взорвался и забрал тебя с собой!\nНапиши последние слова — город их услышит.",
                                 )
-                            guests.append(f"{ROLE_EMOJI[killer.role]} {ROLE_RU[killer.role]}")
+                                morning.append(
+                                    f"💀 {self._link(killer)} — сегодня убили, "
+                                    f"он был {role_txt}\n"
+                                    f"Говорят, у него в гостях был: "
+                                    f"{ROLE_EMOJI[Role.KAMIKAZE]} {ROLE_RU[Role.KAMIKAZE]}"
+                                )
+                            guests.append(role_txt)
                     else:
-                        guests.append(f"{ROLE_EMOJI[killer.role]} {ROLE_RU[killer.role]}")
+                        guests.append(role_txt)
                 if guests:
                     msg += "\nГоворят, у него в гостях был: " + ", ".join(guests)
                 morning.append(msg)
@@ -827,6 +867,8 @@ class Game:
                     killer_roles.append(f"{ROLE_EMOJI[Role.COMMISSAR]} {ROLE_RU[Role.COMMISSAR]}")
                 if "maniac" in kinds:
                     killer_roles.append(f"{ROLE_EMOJI[Role.MANIAC]} {ROLE_RU[Role.MANIAC]}")
+                if "kamikaze" in kinds:
+                    killer_roles.append(f"{ROLE_EMOJI[Role.KAMIKAZE]} {ROLE_RU[Role.KAMIKAZE]}")
                 killer_txt = (
                     f"\nГоворят, у него в гостях был: {', '.join(killer_roles)}"
                     if killer_roles else ""
@@ -836,14 +878,31 @@ class Game:
                     f"он был {ROLE_EMOJI[p.role]} {ROLE_RU[p.role]}{killer_txt}"
                 )
 
+        for p in list(self.players.values()):
+            if p.alive and p.missed_nights >= 3:
+                p.alive = False
+                await self.say(p.user_id, "😴 Ты проспал три ночи подряд и не проснулся.")
+                morning.append(
+                    f"📢 Кто-то слышал, как {self._link(p)} кричал перед смертью:\n"
+                    "Я уснул во время игры, больше так не буду."
+                )
+
         if self.mistress_visit:
             guest = self._p(self.mistress_visit)
             if guest and guest.alive:
                 guest.blocked_vote = True
                 await self.say(guest.user_id, "💋 К тебе этой ночью приходила любовница. Сегодня ты не можешь голосовать.")
 
+        if heal:
+            hp = self._p(heal)
+            if hp and hp.alive and heal not in doctor_saved and heal not in hits:
+                if doctor and heal == doctor.user_id:
+                    await self.say(heal, "🩹 Сегодня ты остался жив, бинты и скальпель не пригодились.")
+                else:
+                    await self.say(heal, "🏥 Доктор приходил к тебе в гости.")
+
         await asyncio.sleep(MORNING_DELAY)
-        await self.broadcast("🌅 Наступило утро!\n\n" + ("\n\n".join(morning) if morning else "Ночь прошла спокойно — никто не погиб."))
+        await self.broadcast("🌅 Наступило утро!\n\n" + ("\n\n".join(morning) if morning else "😴 Ночь прошла спокойно — никто не погиб."))
         logger.info("resolve_night: morning broadcast sent, state=%s", self.state)
 
         if com_check:
@@ -861,6 +920,7 @@ class Game:
                     if p.role == Role.SERGEANT:
                         await self.say(p.user_id, f"🕵️ Сообщение от коммисара:\n{res}")
                         break
+            await self.say(com_check, "🕵️ Кто-то очень сильно заинтересовался твоей ролью.")
 
         logger.info("resolve_night: calling _after_deaths(day)")
         await self._after_deaths(next_phase="day")
@@ -1066,17 +1126,24 @@ class Game:
         await asyncio.sleep(LYNCH_DELAY)
         if likes > dislikes and likes > 0:
             target.alive = False
+            target.lynched = True
             self.last_words_open.add(target.user_id)
             await self.say(
                 target.user_id,
                 "⚖️ Город вынес тебе приговор!\nНапиши последние слова — город их услышит.",
             )
+            if target.role == Role.KAMIKAZE:
+                await self.say(
+                    target.user_id,
+                    "💥 Ты камикадзе, и город тебя повесил.\n"
+                    "Следующей ночью сможешь забрать любого игрока с собой в могилу — но только один раз!",
+                )
             await self.broadcast(
-                f"Вешаем {self._link(target)} :)\n"
+                f"⚖️ Вешаем {self._link(target)} :)\n"
                 f"Он был {ROLE_EMOJI[target.role]} {ROLE_RU[target.role]}"
             )
         else:
-            await self.broadcast("Помилован — сегодня никого не повесили.")
+            await self.broadcast("⚖️ Помилован — сегодня никого не повесили.")
         await asyncio.sleep(LYNCH_DELAY)
         await self._after_deaths(next_phase="night")
 

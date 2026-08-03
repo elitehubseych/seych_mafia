@@ -102,8 +102,7 @@ async def test_kill_and_heal():
         1005: ("skip",), 1006: ("skip",),
     })
     assert g.players[1007].alive, "доктор должен спасти P7 от убийства дона"
-    m = "\n".join(chat_msgs(g))
-    assert "доктор вылечил" in m, m
+    assert "🛡️ Тебя убили, но доктор спас тебя!" in "\n".join(dm_msgs(g, 1007))
     assert "Коммисар проверил" in "\n".join(dm_msgs(g, 1003)), dm_msgs(g, 1003)
     assert "Мафия" in "\n".join(dm_msgs(g, 1003))
     print("test_kill_and_heal OK")
@@ -143,6 +142,93 @@ async def test_kamikaze():
     print("test_kamikaze OK")
 
 
+async def test_kamikaze_multiple_attackers():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.MANIAC, 1007: Role.CITIZEN, 1008: Role.KAMIKAZE,
+        1009: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("target", 1008),
+        1001: ("skip",), 1002: ("skip",),
+        1003: ("mode", "shoot", 1008),
+        1004: ("target", 1003),
+        1005: ("skip",),
+        1006: ("target", 1008),
+    })
+    assert not g.players[1008].alive, "камикадзе погибает"
+    assert not g.players[1000].alive, "дон должен взорваться вместе с камикадзе"
+    assert not g.players[1006].alive, "маньяк должен погибнуть вместе с камикадзе"
+    assert g.players[1003].alive, "коммисар должен выжить, доктор лечит его"
+    assert "спасён доктором" in "\n".join(chat_msgs(g)), "в сообщении должно быть указано спасение комиссара"
+    print("test_kamikaze_multiple_attackers OK")
+
+
+async def test_kamikaze_mistress_blocks():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.KAMIKAZE, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("target", 1006),
+        1001: ("skip",), 1002: ("skip",),
+        1003: ("mode", "shoot", 1006),
+        1004: ("skip",), 1005: ("target", 1006),
+    })
+    assert not g.players[1006].alive, "камикадзе погибает"
+    assert g.players[1000].alive, "дон не должен погибнуть, когда любовница рядом"
+    assert g.players[1003].alive, "коммисар не должен погибнуть, когда любовница рядом"
+    assert "он не смог забрать гостей" in "\n".join(chat_msgs(g)), "утреннее сообщение должно сообщать, что любовница мешает"
+    print("test_kamikaze_mistress_blocks OK")
+
+
+async def test_maniac_kills_target():
+    g = make_game({
+        1000: Role.MANIAC, 1001: Role.CITIZEN, 1002: Role.CITIZEN,
+        1003: Role.MAFIA, 1004: Role.COMMISSAR, 1005: Role.DOCTOR,
+        1006: Role.MISTRESS, 1007: Role.LAWYER, 1008: Role.CITIZEN,
+        1009: Role.CITIZEN,
+    })
+    await g.start_night()
+    while g.state == "night":
+        for uid in list(g.night.awaiting_target):
+            role = g.night.awaiting_target[uid]
+            if role == Role.MANIAC:
+                await g.submit_target(uid, 1001)
+            else:
+                await g.submit_skip(uid)
+    assert not g.players[1001].alive, "маньяк должен убить выбранную цель"
+    assert g.players[1000].alive, "маньяк не должен погибнуть сразу"
+    m = "\n".join(chat_msgs(g))
+    assert "сегодня убили" in m, m
+    print("test_maniac_kills_target OK")
+
+
+async def test_maniac_system_message():
+    g = make_game({
+        1000: Role.MANIAC, 1001: Role.CITIZEN, 1002: Role.CITIZEN,
+        1003: Role.MAFIA, 1004: Role.COMMISSAR, 1005: Role.DOCTOR,
+        1006: Role.MISTRESS, 1007: Role.LAWYER, 1008: Role.CITIZEN,
+        1009: Role.CITIZEN,
+    })
+    await g.start_night()
+    while g.state == "night":
+        for uid in list(g.night.awaiting_target):
+            role = g.night.awaiting_target[uid]
+            if role == Role.MANIAC:
+                await g.submit_target(uid, 1001)
+            elif role == Role.MAFIA:
+                await g.submit_target(uid, 1002)
+            else:
+                await g.submit_skip(uid)
+    m = "\n".join(chat_msgs(g))
+    assert "🔪 Маньяк засел в кустах." in m, m
+    assert m.index("Маньяк засел в кустах") < m.index("Мафия выбрала жертву"), m
+    print("test_maniac_system_message OK")
+
+
 async def test_lawyer_protects_from_check():
     g = make_game({
         1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
@@ -163,20 +249,133 @@ async def test_lawyer_protects_from_check():
 
 async def test_mafia_unanimous_overrides_don():
     g = make_game({
-        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
-        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
-        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.KAMIKAZE,
-        1009: Role.CITIZEN,
+        1000: Role.DON,
+        1001: Role.MAFIA, 1002: Role.MAFIA, 1003: Role.MAFIA, 1004: Role.MAFIA,
+        1005: Role.COMMISSAR, 1006: Role.DOCTOR, 1007: Role.MISTRESS, 1008: Role.LAWYER,
+        1009: Role.CITIZEN, 1010: Role.CITIZEN, 1011: Role.CITIZEN, 1012: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("target", 1012),  # дон хочет 1012
+        1001: ("target", 1009),  # вся мафия единогласно — 1009
+        1002: ("target", 1009),
+        1003: ("target", 1009),
+        1004: ("target", 1009),
+        1005: ("skip",), 1006: ("skip",), 1007: ("skip",), 1008: ("skip",),
+    })
+    assert not g.players[1009].alive, "единогласная мафия из 4 человек перебивает дона"
+    assert g.players[1012].alive, "выбор дона перебит"
+    print("test_mafia_unanimous_overrides_don OK")
+
+
+async def test_mafia_three_unanimous_don_decides():
+    g = make_game({
+        1000: Role.DON,
+        1001: Role.MAFIA, 1002: Role.MAFIA, 1003: Role.MAFIA,
+        1005: Role.COMMISSAR, 1006: Role.DOCTOR, 1007: Role.MISTRESS, 1008: Role.LAWYER,
+        1009: Role.CITIZEN, 1010: Role.CITIZEN, 1011: Role.CITIZEN,
     })
     await night_flow(g, {
         1000: ("target", 1009),  # дон хочет 1009
-        1001: ("target", 1008),  # мафия единогласно — 1008
-        1002: ("target", 1008),
+        1001: ("target", 1010),  # мафия единогласно — 1010
+        1002: ("target", 1010),
+        1003: ("target", 1010),
+        1005: ("skip",), 1006: ("skip",), 1007: ("skip",), 1008: ("skip",),
+    })
+    assert not g.players[1009].alive, "при 3 мафии решает дон"
+    assert g.players[1010].alive, "единогласная мафия из 3 человек не перебивает дона"
+    print("test_mafia_three_unanimous_don_decides OK")
+
+
+async def test_mafia_split_don_decides():
+    g = make_game({
+        1000: Role.DON,
+        1001: Role.MAFIA, 1002: Role.MAFIA, 1003: Role.MAFIA,
+        1005: Role.COMMISSAR, 1006: Role.DOCTOR, 1007: Role.MISTRESS, 1008: Role.LAWYER,
+        1009: Role.CITIZEN, 1010: Role.CITIZEN, 1011: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("target", 1009),  # дон хочет 1009
+        1001: ("target", 1010),  # мафия кинула в разных
+        1002: ("target", 1011),
+        1003: ("skip",),
+        1005: ("skip",), 1006: ("skip",), 1007: ("skip",), 1008: ("skip",),
+    })
+    assert not g.players[1009].alive, "при разнобое мафии решает дон"
+    assert g.players[1010].alive and g.players[1011].alive, "выбор отдельных мафий не должен убивать"
+    print("test_mafia_split_don_decides OK")
+
+
+async def test_don_skip_mafia_unanimous_kills():
+    g = make_game({
+        1000: Role.DON,
+        1001: Role.MAFIA, 1002: Role.MAFIA, 1003: Role.MAFIA, 1004: Role.MAFIA,
+        1005: Role.COMMISSAR, 1006: Role.DOCTOR, 1007: Role.MISTRESS, 1008: Role.LAWYER,
+        1009: Role.CITIZEN, 1010: Role.CITIZEN, 1011: Role.CITIZEN, 1012: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",),  # дон отказался
+        1001: ("target", 1009),  # мафия единогласно — 1009
+        1002: ("target", 1009),
+        1003: ("target", 1009),
+        1004: ("target", 1009),
+        1005: ("skip",), 1006: ("skip",), 1007: ("skip",), 1008: ("skip",),
+    })
+    assert not g.players[1009].alive, "дон пропустил, но единогласная мафия убивает 1009"
+    print("test_don_skip_mafia_unanimous_kills OK")
+
+
+async def test_don_skip_mafia_split_no_kill():
+    g = make_game({
+        1000: Role.DON,
+        1001: Role.MAFIA, 1002: Role.MAFIA,
+        1005: Role.COMMISSAR, 1006: Role.DOCTOR, 1007: Role.MISTRESS, 1008: Role.LAWYER,
+        1009: Role.CITIZEN, 1010: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",),  # дон отказался
+        1001: ("target", 1009),  # мафия кинула в разных
+        1002: ("target", 1010),
+        1005: ("skip",), 1006: ("skip",), 1007: ("skip",), 1008: ("skip",),
+    })
+    assert g.players[1009].alive, "дон пропустил и мафия разошлась — никто не убит"
+    assert g.players[1010].alive, "дон пропустил и мафия разошлась — никто не убит"
+    m = "\n".join(chat_msgs(g))
+    assert "Ночь прошла спокойно" in m, m
+    print("test_don_skip_mafia_split_no_kill OK")
+
+
+async def test_mafia_decision_messages():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+        1009: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",),  # дон не хочет ничего решать
+        1001: ("target", 1007), 1002: ("target", 1008),  # мафия разошлась
         1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
     })
-    assert not g.players[1008].alive, "единогласный голос мафии должен убить 1008"
-    assert g.players[1009].alive, "выбор дона перебит"
-    print("test_mafia_unanimous_overrides_don OK")
+    m = "\n".join(chat_msgs(g))
+    assert "😤 Дон не хочет ничего решать." in m, m
+    assert "🤵🏻 Мафия выбрала жертву" not in m, "без решения мафии сообщение о жертве не пишется"
+    assert g.players[1007].alive and g.players[1008].alive
+
+    g2 = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+        1009: Role.CITIZEN,
+    })
+    await night_flow(g2, {
+        1000: ("target", 1009),  # дон выбрал 1009
+        1001: ("target", 1007), 1002: ("target", 1007),  # мафия единогласно
+        1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
+    })
+    m2 = "\n".join(chat_msgs(g2))
+    assert "🤵🏻 Мафия выбрала жертву" in m2, m2
+    assert "🗡️ Мафия выбрала жертву" not in m2, "эмодзи кинжала заменён на эмодзи человека"
+    print("test_mafia_decision_messages OK")
 
 
 async def test_commissar_shoot():
@@ -302,7 +501,7 @@ async def test_full_game():
     print(f"test_full_game OK (ended in {steps} steps)")
 
 
-async def test_night_group_timeout_advances():
+async def test_night_timeout_advances():
     g = make_game({
         1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
         1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
@@ -320,7 +519,7 @@ async def test_night_group_timeout_advances():
     finally:
         game_mod.NIGHT_SECONDS = old_night
     assert g.state == "voting", f"ночь зависла: state={g.state}"
-    print("test_night_group_timeout_advances OK")
+    print("test_night_timeout_advances OK")
 
 
 async def test_last_words():
@@ -411,10 +610,9 @@ async def test_heal_then_morning():
     await g.submit_target(1004, 1002)
     await g.submit_target(1000, 1002)
     assert g.state == "voting", f"зависло: state={g.state}"
-    m = "\n".join(chat_msgs(g))
-    assert "Наступило утро" in m
-    assert "доктор вылечил" in m
-    assert "Ночь прошла спокойно" not in m
+    assert "Наступило утро" in "\n".join(chat_msgs(g))
+    assert "🛡️ Тебя убили, но доктор спас тебя!" in "\n".join(dm_msgs(g, 1002))
+    assert "Ночь прошла спокойно" in "\n".join(chat_msgs(g))
     print("test_heal_then_morning OK")
 
 
@@ -438,9 +636,10 @@ async def test_kamikaze_don_and_commissar_shot_reach_voting():
     m = "\n".join(chat_msgs(g))
     assert "Камикадзе" in m and "Сержант" in m, m
     guests = [line for line in m.split("\n") if "в гостях был" in line]
-    assert len(guests) == 2, guests
-    assert "Дон" in guests[0] and "id1000" not in guests[0] and "🤵🏻" in guests[0], guests
-    assert "Коммисар" in guests[1] and "id1003" not in guests[1] and "🕵️" in guests[1], guests
+    assert len(guests) == 3, guests
+    assert "Камикадзе" in guests[0] and "💥" in guests[0] and "id1000" not in guests[0], guests
+    assert "Дон" in guests[1] and "🤵🏻" in guests[1] and "id1000" not in guests[1], guests
+    assert "Коммисар" in guests[2] and "id1003" not in guests[2] and "🕵️" in guests[2], guests
     print("test_kamikaze_don_and_commissar_shot_reach_voting OK")
 
 
@@ -499,18 +698,224 @@ async def test_mistress_cannot_repeat_visit():
     print("test_mistress_cannot_repeat_visit OK")
 
 
+async def test_commissar_check_notifies_target():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+        1009: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",), 1001: ("skip",), 1002: ("skip",),
+        1003: ("mode", "check", 1001),
+        1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
+    })
+    dm = "\n".join(dm_msgs(g, 1001))
+    assert "🕵️ Кто-то очень сильно заинтересовался твоей ролью." in dm, dm
+    print("test_commissar_check_notifies_target OK")
+
+
+async def test_doctor_visit_notification():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+        1009: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",), 1001: ("skip",), 1002: ("skip",),
+        1003: ("mode", "check", 1001), 1004: ("target", 1007), 1005: ("skip",),
+        1006: ("skip",),
+    })
+    dm = "\n".join(dm_msgs(g, 1007))
+    assert "🏥 Доктор приходил к тебе в гости." in dm, dm
+    assert "спас тебя" not in dm, "визит не должен дублироваться со спасением"
+    print("test_doctor_visit_notification OK")
+
+
+async def test_doctor_self_heal_notification():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+        1009: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",), 1001: ("skip",), 1002: ("skip",),
+        1003: ("mode", "check", 1001), 1004: ("target", 1004), 1005: ("skip",),
+        1006: ("skip",),
+    })
+    assert g.players[1004].self_healed, "доктор применил самолечение"
+    dm = "\n".join(dm_msgs(g, 1004))
+    assert "🩹 Сегодня ты остался жив, бинты и скальпель не пригодились." in dm, dm
+    print("test_doctor_self_heal_notification OK")
+
+
+async def test_night_duration_announced():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+        1009: Role.CITIZEN,
+    })
+    await g.start_night()
+    m = "\n".join(chat_msgs(g))
+    assert "⏳ На ночь даётся" in m and "секунд" in m, m
+    print("test_night_duration_announced OK")
+
+
+async def test_inactivity_kill_after_3_nights():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+        1009: Role.CITIZEN,
+    })
+    old_night = game_mod.NIGHT_SECONDS
+    game_mod.NIGHT_SECONDS = 0.01
+    try:
+        for _ in range(3):
+            await g.start_night()
+            for uid in list(g.night.awaiting_target):
+                if uid != 1004:
+                    await g.submit_skip(uid)
+            loop = asyncio.get_event_loop()
+            deadline = loop.time() + 2.0
+            while g.state == "night" and loop.time() < deadline:
+                await asyncio.sleep(0.05)
+    finally:
+        game_mod.NIGHT_SECONDS = old_night
+    assert not g.players[1004].alive, "доктор, спавший 3 ночи подряд, должен погибнуть"
+    dm = "\n".join(dm_msgs(g, 1004))
+    assert "Время вышло" not in dm, "бот должен молчать при бездействии"
+    m = "\n".join(chat_msgs(g))
+    assert "Я уснул во время игры, больше так не буду." in m, m
+    assert "в гостях был" not in m, "у сна не должно быть убийцы"
+    print("test_inactivity_kill_after_3_nights OK")
+
+
+async def test_inactivity_resets_when_playing():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+        1009: Role.CITIZEN,
+    })
+    old_night = game_mod.NIGHT_SECONDS
+    game_mod.NIGHT_SECONDS = 0.01
+    try:
+        for i in range(3):
+            await g.start_night()
+            for uid in list(g.night.awaiting_target):
+                if uid == 1004:
+                    if i == 1:
+                        await g.submit_target(uid, 1007)
+                else:
+                    await g.submit_skip(uid)
+            loop = asyncio.get_event_loop()
+            deadline = loop.time() + 2.0
+            while g.state == "night" and loop.time() < deadline:
+                await asyncio.sleep(0.05)
+    finally:
+        game_mod.NIGHT_SECONDS = old_night
+    assert g.players[1004].alive, "доктор, который начал играть, не должен погибнуть"
+    assert g.players[1004].missed_nights == 1, g.players[1004].missed_nights
+    print("test_inactivity_resets_when_playing OK")
+
+
+async def test_kamikaze_revenge_after_lynch():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.KAMIKAZE,
+        1009: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",), 1001: ("skip",), 1002: ("skip",),
+        1003: ("mode", "check", 1001), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
+    })
+    assert g.state == "voting"
+    for p in g.alive_players:
+        await g.submit_vote(p.user_id, 1008)
+    await g.resolve_votes()
+    assert g.state == "confirm"
+    for p in g.alive_players:
+        await g.submit_confirm(p.user_id, "like")
+    assert not g.players[1008].alive, "камикадзе повешен днём"
+    assert g.players[1008].lynched, "у повешенного должен стоять флаг lynched"
+    assert g.state == "night", f"после казни должна начаться ночь, state={g.state}"
+
+    roles_in_night = [r for r, _ in g._night_groups]
+    assert Role.KAMIKAZE in roles_in_night, "мёртвый камикадзе должен получить ночной ход"
+
+    steps = 0
+    while g.state == "night" and steps < 20:
+        steps += 1
+        for uid in list(g.night.awaiting_target):
+            if uid == 1008:
+                await g.submit_target(uid, 1007)
+            else:
+                await g.submit_skip(uid)
+    assert not g.players[1007].alive, "камикадзе забирает выбранного с собой в могилу"
+    m = "\n".join(chat_msgs(g))
+    assert "Камикадзе" in m, m
+    assert "в гостях был" in m, m
+    print("test_kamikaze_revenge_after_lynch OK")
+
+
+async def test_kamikaze_revenge_saved_by_doctor():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.KAMIKAZE,
+        1009: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",), 1001: ("skip",), 1002: ("skip",),
+        1003: ("mode", "check", 1001), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
+    })
+    for p in g.alive_players:
+        await g.submit_vote(p.user_id, 1008)
+    await g.resolve_votes()
+    for p in g.alive_players:
+        await g.submit_confirm(p.user_id, "like")
+    assert g.state == "night", f"state={g.state}"
+
+    steps = 0
+    while g.state == "night" and steps < 20:
+        steps += 1
+        for uid in list(g.night.awaiting_target):
+            if uid == 1008:
+                await g.submit_target(uid, 1007)
+            elif uid == 1004:
+                await g.submit_target(uid, 1007)
+            else:
+                await g.submit_skip(uid)
+    assert g.players[1007].alive, "доктор спасает цель камикадзе"
+    dm = "\n".join(dm_msgs(g, 1007))
+    assert "🛡️ Тебя убили, но доктор спас тебя!" in dm, dm
+    print("test_kamikaze_revenge_saved_by_doctor OK")
+
+
 async def main():
     test_role_configs()
     await test_kill_and_heal()
     await test_mistress_blocks_don()
     await test_kamikaze()
     await test_lawyer_protects_from_check()
+    await test_maniac_kills_target()
+    await test_maniac_system_message()
     await test_mafia_unanimous_overrides_don()
+    await test_mafia_three_unanimous_don_decides()
+    await test_mafia_split_don_decides()
+    await test_don_skip_mafia_unanimous_kills()
+    await test_don_skip_mafia_split_no_kill()
+    await test_mafia_decision_messages()
     await test_commissar_shoot()
     await test_day_lynch()
     await test_1v1_endgame()
     await test_full_game()
-    await test_night_group_timeout_advances()
+    await test_night_timeout_advances()
     await test_last_words()
     await test_mafia_cannot_kill_allies()
     await test_morning_merged_message()
@@ -518,6 +923,14 @@ async def main():
     await test_kamikaze_don_and_commissar_shot_reach_voting()
     await test_lynch_confirm_spare()
     await test_mistress_cannot_repeat_visit()
+    await test_commissar_check_notifies_target()
+    await test_doctor_visit_notification()
+    await test_doctor_self_heal_notification()
+    await test_night_duration_announced()
+    await test_inactivity_kill_after_3_nights()
+    await test_inactivity_resets_when_playing()
+    await test_kamikaze_revenge_after_lynch()
+    await test_kamikaze_revenge_saved_by_doctor()
     print("\nALL TESTS PASSED")
 
 
