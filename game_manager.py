@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 
 import config
+from db import Database
 
 logger = logging.getLogger(__name__)
 
@@ -12,9 +14,17 @@ logger = logging.getLogger(__name__)
 class GameManager:
     def __init__(self) -> None:
         self.games: dict[int, object] = {}
+        self.db = Database()
         self.nicknames: dict[int, str] = {}
         self.registered: set[int] = set()
         self._load()
+
+    async def connect_db(self) -> None:
+        await self.db.connect()
+        if self.db.connected:
+            nicknames, registered = await self.db.load_users()
+            self.nicknames = nicknames
+            self.registered = registered
 
     def _load(self) -> None:
         os.makedirs(config.DATA_DIR, exist_ok=True)
@@ -55,6 +65,11 @@ class GameManager:
         if user_id not in self.registered:
             self.registered.add(user_id)
             self._save()
+            if self.db.connected:
+                try:
+                    asyncio.create_task(self.db.register(user_id))
+                except Exception:  # noqa: BLE001
+                    logger.exception("DB register task failed")
             return True
         return False
 
@@ -69,6 +84,11 @@ class GameManager:
         self.nicknames[user_id] = nick
         self.registered.add(user_id)
         self._save()
+        if self.db.connected:
+            try:
+                asyncio.create_task(self.db.set_nickname(user_id, nick))
+            except Exception:  # noqa: BLE001
+                logger.exception("DB set_nickname task failed")
         return nick
 
 

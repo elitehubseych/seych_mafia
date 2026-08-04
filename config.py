@@ -16,6 +16,13 @@ VK_ME_LINK = os.getenv(
     f"https://vk.me/club{VK_GROUP_ID}" if VK_GROUP_ID else "https://vk.me/club233542237",
 )
 
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_PASSWORD = os.getenv("SUPABASE_PASSWORD", "").strip()
+SUPABASE_PUBLISHABLE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
+SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "").strip()
+SUPABASE_JWKS_URL = os.getenv("SUPABASE_JWKS_URL", "").strip()
+
 WEBAPP_HOST = os.getenv("WEBAPP_HOST", "0.0.0.0")
 WEBAPP_PORT = int(os.getenv("WEBAPP_PORT") or os.getenv("PORT") or "8080")
 CALLBACK_PATH = os.getenv("CALLBACK_PATH", "/")

@@ -24,14 +24,26 @@ def _player_link(game: Game, uid: int) -> str:
     return f"[id{uid}|{p.name}]" if p else "—"
 
 
-async def _confirm_event_message(vk: VKAPI, obj: dict, text: str) -> None:
+async def _confirm_event_message(
+    vk: VKAPI,
+    obj: dict,
+    text: str,
+    keyboard=None,
+) -> None:
     peer_id = obj.get("peer_id")
-    msg_id = obj.get("conversation_message_id") or obj.get("message_id")
-    if not peer_id or not msg_id:
+    conversation_message_id = obj.get("conversation_message_id")
+    message_id = obj.get("message_id")
+    if not peer_id or (conversation_message_id is None and message_id is None):
         logger.warning("message_event without peer_id/message_id: %s", obj)
         return
     try:
-        await vk.edit(peer_id, msg_id, text, keyboard={"buttons": []})
+        await vk.edit(
+            peer_id,
+            message_id,
+            text,
+            keyboard=keyboard if keyboard is not None else "",
+            conversation_message_id=conversation_message_id,
+        )
     except Exception:  # noqa: BLE001
         logger.warning("edit event message failed", exc_info=True)
 
@@ -246,14 +258,29 @@ async def handle_message_event(vk: VKAPI, obj: dict) -> None:
         ok = mode in {"check", "shoot"} and game.check_mode(user_id, mode)
         await vk.answer_event(event_id, user_id, peer_id, "✅ Действие выбрано" if ok else "⛔ Нельзя сейчас")
         if ok:
-            await game.submit_mode(user_id, mode)
-            text = "✅ Режим: 🔍 Проверить роль" if mode == "check" else "✅ Режим: 🔫 Выстрелить"
-            await _confirm_event_message(vk, obj, text)
+            conversation_message_id = obj.get("conversation_message_id")
+            message_id = obj.get("message_id")
+            await game.submit_mode(
+                user_id,
+                mode,
+                peer_id=peer_id,
+                message_id=message_id,
+                conversation_message_id=conversation_message_id,
+            )
     elif action == "page":
         page = int(payload.get("p") or 0)
         sub = payload.get("a") or "target"
         await vk.answer_event(event_id, user_id, peer_id, f"📄 Стр. {page + 1}")
-        await game.resend_prompt(user_id, sub, page)
+        conversation_message_id = obj.get("conversation_message_id")
+        message_id = obj.get("message_id")
+        await game.resend_prompt(
+            user_id,
+            sub,
+            page,
+            peer_id=peer_id,
+            message_id=message_id,
+            conversation_message_id=conversation_message_id,
+        )
     elif action == "target":
         target_uid = payload.get("u")
         if target_uid is None:

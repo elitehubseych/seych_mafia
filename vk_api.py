@@ -109,12 +109,21 @@ class VKAPI:
             return resp
         return None
 
-    async def edit(self, peer_id: int, message_id: int, text: str, keyboard=None) -> None:
-        params = {
-            "peer_id": peer_id,
-            "message": text,
-            "conversation_message_id": message_id,
-        }
+    async def edit(
+        self,
+        peer_id: int,
+        message_id: int | None = None,
+        text: str | None = None,
+        keyboard=None,
+        conversation_message_id: int | None = None,
+    ) -> None:
+        params = {"peer_id": peer_id}
+        if text is not None:
+            params["message"] = text
+        if conversation_message_id is not None:
+            params["conversation_message_id"] = conversation_message_id
+        elif message_id is not None:
+            params["message_id"] = message_id
         if keyboard is not None:
             params["keyboard"] = self._to_json(keyboard)
         await self.call("messages.edit", **params)

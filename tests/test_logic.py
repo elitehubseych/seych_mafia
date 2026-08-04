@@ -633,6 +633,28 @@ async def test_mafia_cannot_kill_allies():
     print("test_mafia_cannot_kill_allies OK")
 
 
+async def test_kamikaze_guest_message_shows_don_only_when_don_and_mafia_same_target():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+        1009: Role.KAMIKAZE,
+    })
+    await g.start_night()
+    await g.submit_target(1000, 1009)
+    await g.submit_skip(1001)
+    await g.submit_skip(1002)
+    await g.submit_skip(1003)
+    await g.submit_skip(1004)
+    await g.submit_skip(1005)
+    await g.submit_skip(1006)
+    assert g.players[1009].alive is False, "камикадзе должен погибнуть"
+    m = "\n".join(chat_msgs(g))
+    assert "Говорят, у него в гостях был: 🤵🏻 Дон" in m, m
+    assert "Мафия" not in m, m
+    print("test_kamikaze_guest_message_shows_don_only_when_don_and_mafia_same_target OK")
+
+
 async def test_morning_merged_message():
     base = {
         1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,

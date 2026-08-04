@@ -11,6 +11,7 @@ import aiohttp
 from aiohttp import web
 
 import config
+from game_manager import manager
 from handlers import handle_message_event, handle_message_new
 from vk_api import vk
 
@@ -83,7 +84,11 @@ def main() -> None:
     asyncio.set_event_loop(loop)
     loop.set_exception_handler(_loop_exception_handler)
     app = web.Application()
-    app.on_cleanup.append(lambda _app: vk.close())
+    async def _close_resources(_app: web.Application) -> None:
+        await vk.close()
+        await manager.db.close()
+
+    app.on_cleanup.append(_close_resources)
     app.router.add_post(config.CALLBACK_PATH, callback_handler)
     app.router.add_post("/{tail:.*}", callback_handler)
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
@@ -95,6 +100,20 @@ def main() -> None:
             keepalive_url.rstrip("/"),
             config.KEEPALIVE_INTERVAL,
         )
+    logger.info("DATABASE_URL: %s", "set" if config.DATABASE_URL else "not set")
+    logger.info("SUPABASE_URL: %s", "set" if config.SUPABASE_URL else "not set")
+    logger.info("SUPABASE_PASSWORD: %s", "set" if config.SUPABASE_PASSWORD else "not set")
+    logger.info(
+        "SUPABASE_PUBLISHABLE_KEY: %s",
+        "set" if config.SUPABASE_PUBLISHABLE_KEY else "not set",
+    )
+    logger.info(
+        "SUPABASE_SECRET_KEY: %s",
+        "set" if config.SUPABASE_SECRET_KEY else "not set",
+    )
+    logger.info("SUPABASE_JWKS_URL: %s", "set" if config.SUPABASE_JWKS_URL else "not set")
+    loop.run_until_complete(manager.connect_db())
+    logger.info("Database connection state: %s", "connected" if manager.db.connected else "not connected")
     logger.info(
         "VK Callback server listening on %s:%s%s",
         config.WEBAPP_HOST,

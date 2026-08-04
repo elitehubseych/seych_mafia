@@ -386,33 +386,36 @@ class Game:
                 groups.append((Role.KAMIKAZE, [p.user_id]))
         return groups
 
-    async def send_night_prompt(self, player: Player, role: Role, page: int = 0) -> None:
+    def _night_prompt_text_and_kb(
+        self,
+        player: Player,
+        role: Role,
+        page: int = 0,
+    ) -> tuple[str, dict]:
         alive = self.alive_players
         if role == Role.COMMISSAR:
             self.night.awaiting_target[player.user_id] = Role.COMMISSAR
-            text = "🕵️ Ты коммисар!\nЧто делаем этой ночью?"
-            await self.say(player.user_id, text, keyboard=commissar_mode_kb())
-            return
+            return "🕵️ Ты коммисар!\nЧто делаем этой ночью?", commissar_mode_kb()
         if role == Role.DOCTOR:
             exclude = {player.user_id} if player.self_healed else set()
             kb = players_kb(
                 alive, exclude=exclude, skip_label=CHAT_ACTIONS[Role.DOCTOR][1], page=page
             )
-            text = "🩺 Ты доктор!\nКого будем сегодня лечить?"
-        elif role == Role.MISTRESS:
+            return "🩺 Ты доктор!\nКого будем сегодня лечить?", kb
+        if role == Role.MISTRESS:
             exclude = {player.user_id}
             if self.last_mistress_visit:
                 exclude.add(self.last_mistress_visit)
             kb = players_kb(
                 alive, exclude=exclude, skip_label=CHAT_ACTIONS[Role.MISTRESS][1], page=page
             )
-            text = "💋 Ты любовница!\nС кем провести эту ночь?"
-        elif role == Role.LAWYER:
+            return "💋 Ты любовница!\nС кем провести эту ночь?", kb
+        if role == Role.LAWYER:
             kb = players_kb(
                 alive, skip_label=CHAT_ACTIONS[Role.LAWYER][1], page=page
             )
-            text = "⚖️ Ты адвокат!\nКого защитим от проверки коммисара?"
-        elif role == Role.MANIAC:
+            return "⚖️ Ты адвокат!\nКого защитим от проверки коммисара?", kb
+        if role == Role.MANIAC:
             exclude = {player.user_id}
             kb = players_kb(
                 alive,
@@ -420,19 +423,20 @@ class Game:
                 skip_label=f"{ROLE_EMOJI[Role.MANIAC]} Маньяк пропускает ход",
                 page=page,
             )
-            text = f"{ROLE_EMOJI[Role.MANIAC]} Ты маньяк!\nКого убиваем сегодня ночью?"
-        elif role == Role.KAMIKAZE:
+            return f"{ROLE_EMOJI[Role.MANIAC]} Ты маньяк!\nКого убиваем сегодня ночью?", kb
+        if role == Role.KAMIKAZE:
             kb = players_kb(
                 alive,
                 exclude={player.user_id},
                 skip_label="😴 Камикадзе не будет мстить",
                 page=page,
             )
-            text = (
+            return (
                 "💥 Ты камикадзе, и город отправил тебя на тот свет!\n"
-                "Выбери, кого заберёшь с собой в могилу (только один раз за игру)."
+                "Выбери, кого заберёшь с собой в могилу (только один раз за игру).",
+                kb,
             )
-        elif role in (Role.DON, Role.MAFIA):
+        if role in (Role.DON, Role.MAFIA):
             exclude = {player.user_id}
             for q in alive:
                 if q.user_id != player.user_id and q.role in (Role.DON, Role.MAFIA):
@@ -448,17 +452,20 @@ class Game:
                 page=page,
             )
             if role == Role.DON:
-                text = (
+                return (
                     f"{ROLE_EMOJI[Role.DON]} Ты дон!\n"
-                    "Пришло время голосовать — кого приводим в жертву?"
+                    "Пришло время голосовать — кого приводим в жертву?",
+                    kb,
                 )
-            else:
-                text = (
-                    f"{ROLE_EMOJI[Role.MAFIA]} Ты мафия!\n"
-                    "Пришло время голосовать — кого приводим в жертву?"
-                )
-        else:
-            return
+            return (
+                f"{ROLE_EMOJI[Role.MAFIA]} Ты мафия!\n"
+                "Пришло время голосовать — кого приводим в жертву?",
+                kb,
+            )
+        return "", {"inline": True, "buttons": []}
+
+    async def send_night_prompt(self, player: Player, role: Role, page: int = 0) -> None:
+        text, kb = self._night_prompt_text_and_kb(player, role, page)
         self.night.awaiting_target[player.user_id] = role
         await self.say(player.user_id, text, keyboard=kb)
 
@@ -524,30 +531,86 @@ class Game:
         p = self._p(uid)
         return bool(p and p.alive and not p.blocked_vote and uid not in self.votes)
 
-    async def submit_mode(self, uid: int, mode: str) -> bool:
+    async def submit_mode(
+        self,
+        uid: int,
+        mode: str,
+        peer_id: int | None = None,
+        message_id: int | None = None,
+        conversation_message_id: int | None = None,
+    ) -> bool:
         if not self.check_mode(uid, mode):
             return False
         self.night.commissar_mode[uid] = mode
         text = "🕵️ Кого проверяем?" if mode == "check" else "🔫 В кого стреляем?"
         kb = players_kb(self.alive_players, exclude={uid})
-        await self.say(uid, text, keyboard=kb)
+        if peer_id is not None and (message_id is not None or conversation_message_id is not None):
+            await self.bot.edit(
+                peer_id,
+                message_id,
+                text,
+                keyboard=kb,
+                conversation_message_id=conversation_message_id,
+            )
+        else:
+            await self.say(uid, text, keyboard=kb)
         return True
 
-    async def resend_prompt(self, uid: int, action: str, page: int = 0) -> bool:
+    async def resend_prompt(
+        self,
+        uid: int,
+        action: str,
+        page: int = 0,
+        peer_id: int | None = None,
+        message_id: int | None = None,
+        conversation_message_id: int | None = None,
+    ) -> bool:
         if self.state == "night" and uid in self.night.awaiting_target:
             role = self.night.awaiting_target[uid]
             if role == Role.COMMISSAR and uid in self.night.commissar_mode:
                 mode = self.night.commissar_mode[uid]
                 text = "🕵️ Кого проверяем?" if mode == "check" else "🔫 В кого стреляем?"
                 kb = players_kb(self.alive_players, exclude={uid}, page=page)
-                await self.say(uid, text, keyboard=kb)
+                if peer_id is not None and (message_id is not None or conversation_message_id is not None):
+                    await self.bot.edit(
+                        peer_id,
+                        message_id,
+                        text,
+                        keyboard=kb,
+                        conversation_message_id=conversation_message_id,
+                    )
+                else:
+                    await self.say(uid, text, keyboard=kb)
                 return True
-            await self.send_night_prompt(self.players[uid], role, page=page)
+            if peer_id is not None and (message_id is not None or conversation_message_id is not None):
+                text, kb = self._night_prompt_text_and_kb(self.players[uid], role, page)
+                await self.bot.edit(
+                    peer_id,
+                    message_id,
+                    text,
+                    keyboard=kb,
+                    conversation_message_id=conversation_message_id,
+                )
+            else:
+                await self.send_night_prompt(self.players[uid], role, page=page)
             return True
         if self.state == "voting":
             p = self._p(uid)
             if p and p.alive and not p.blocked_vote and uid not in self.votes:
-                await self.send_vote_prompt(p, page=page)
+                if peer_id is not None and message_id is not None:
+                    text = "🗳️ Собрание!\nЗа кого будем голосовать? (одна минута)"
+                    kb = players_kb(
+                        self.alive_players,
+                        action="vote",
+                        exclude={uid},
+                        include_skip=True,
+                        skip_label="🤐 Воздержаться",
+                        skip_data="abstain",
+                        page=page,
+                    )
+                    await self.bot.edit(peer_id, message_id, text, keyboard=kb)
+                else:
+                    await self.send_vote_prompt(p, page=page)
                 return True
         return False
 
@@ -852,9 +915,14 @@ class Game:
                         seen.add(killer.user_id)
                         killers.append(killer)
 
-                for q in [don, *mafias]:
-                    if q and (a := act.get(q.user_id)) and a.target == uid:
-                        add_killer(q)
+                if don and don_act and don_act.target == uid:
+                    add_killer(don)
+                elif mafia_all_voted and mafia_target == uid:
+                    killer_mafia = next(
+                        (m for m in mafias if (a := act.get(m.user_id)) and a.target == uid),
+                        None,
+                    )
+                    add_killer(killer_mafia)
                 if com_target == uid:
                     add_killer(commissar)
                 if mani_target == uid:
@@ -894,7 +962,7 @@ class Game:
             else:
                 killer_roles = []
                 if "mafia" in kinds:
-                    killer_roles.append(f"{ROLE_EMOJI[Role.DON]} {ROLE_RU[Role.DON]}")
+                    killer_roles.append(f"{ROLE_EMOJI[Role.MAFIA]} {ROLE_RU[Role.MAFIA]}")
                 if "com" in kinds:
                     killer_roles.append(f"{ROLE_EMOJI[Role.COMMISSAR]} {ROLE_RU[Role.COMMISSAR]}")
                 if "maniac" in kinds:
@@ -1025,7 +1093,6 @@ class Game:
         p = self._p(uid)
         self.votes[uid] = target
         await self.broadcast(f"🗳️ {self._link(p)} — отдал свой голос.")
-        await self.say(uid, "✅ Твой голос учтён.")
         eligible = [q for q in self.alive_players if not q.blocked_vote]
         if all(q.user_id in self.votes for q in eligible):
             await self.resolve_votes()
