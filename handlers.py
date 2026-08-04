@@ -199,7 +199,7 @@ async def handle_private_command(vk: VKAPI, user_id: int, text: str) -> None:
         if not nick:
             await vk.send(user_id, "ℹ️ Использование: /setnick ТвойНик")
             return
-        manager.set_nickname(user_id, nick)
+        await manager.set_nickname(user_id, nick)
         game = manager.game_for_user(user_id)
         if game and user_id in game.players:
             game.players[user_id].name = nick
@@ -211,7 +211,7 @@ async def handle_private_command(vk: VKAPI, user_id: int, text: str) -> None:
 
 
 async def handle_private_text(vk: VKAPI, user_id: int) -> None:
-    manager.register(user_id)
+    await manager.register(user_id)
     await vk.send(
         user_id,
         "✅ Вы успешно зарегистрировались в боте!\n"
@@ -356,7 +356,7 @@ async def event_join(
         return
     await vk.answer_event(event_id, user_id, peer_id, "✅ Ты в игре!")
     name = await display_name(vk, user_id)
-    manager.register(user_id)
+    await manager.register(user_id)
     if game.add_player(user_id, name):
         chat_title = await vk.get_chat_title(peer_id) or "этом чате"
         await vk.send(
