@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import socket
+import ssl
 import urllib.parse
 
 import config
@@ -74,32 +76,41 @@ class Database:
             safe_url = "[masked]"
 
         logger.info("Подключаюсь к базе данных: %s", safe_url)
+        parsed = urllib.parse.urlparse(database_url)
+        use_ssl = parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+        create_pool_kwargs = {
+            "min_size": 1,
+            "max_size": 3,
+            "command_timeout": 10,
+        }
+        if use_ssl:
+            create_pool_kwargs["ssl"] = "require"
+
         try:
-            self.pool = await asyncpg.create_pool(
-                database_url,
-                min_size=1,
-                max_size=3,
-                command_timeout=10,
-            )
-        except OSError as exc:
-            parsed = urllib.parse.urlparse(database_url)
-            if parsed.hostname and exc.errno in {101, 110, 113}:
-                ipv4 = _resolve_ipv4_host(parsed.hostname, parsed.port or 5432)
-                if ipv4:
-                    logger.info(
-                        "IPv6 не работает; пробую подключение к IPv4 %s",
-                        ipv4,
-                    )
-                    self.pool = await asyncpg.create_pool(
-                        user=parsed.username,
-                        password=parsed.password,
-                        database=(parsed.path or "/").lstrip("/") or "postgres",
-                        host=ipv4,
-                        port=parsed.port or 5432,
-                        min_size=1,
-                        max_size=3,
-                        command_timeout=10,
-                    )
+            self.pool = await asyncpg.create_pool(database_url, **create_pool_kwargs)
+        except (OSError, asyncpg.PostgresError) as exc:
+            if isinstance(exc, OSError):
+                parsed = urllib.parse.urlparse(database_url)
+                if parsed.hostname and exc.errno in {101, 110, 113}:
+                    ipv4 = _resolve_ipv4_host(parsed.hostname, parsed.port or 5432)
+                    if ipv4:
+                        logger.info(
+                            "IPv6 не работает; пробую подключение к IPv4 %s",
+                            ipv4,
+                        )
+                        self.pool = await asyncpg.create_pool(
+                            user=parsed.username,
+                            password=parsed.password,
+                            database=(parsed.path or "/").lstrip("/") or "postgres",
+                            host=ipv4,
+                            port=parsed.port or 5432,
+                            ssl="require" if use_ssl else None,
+                            min_size=1,
+                            max_size=3,
+                            command_timeout=10,
+                        )
+                    else:
+                        raise
                 else:
                     raise
             else:

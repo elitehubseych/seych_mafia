@@ -113,7 +113,12 @@ def main() -> None:
     )
     logger.info("SUPABASE_JWKS_URL: %s", "set" if config.SUPABASE_JWKS_URL else "not set")
     loop.run_until_complete(manager.connect_db())
-    logger.info("Database connection state: %s", "connected" if manager.db.connected else "not connected")
+    if not manager.db.connected:
+        logger.error(
+            "Database connection failed. Set DATABASE_URL or SUPABASE_URL/SUPABASE_PASSWORD correctly."
+        )
+        raise RuntimeError("Database connection failed; aborting startup.")
+    logger.info("Database connection state: connected")
     logger.info(
         "VK Callback server listening on %s:%s%s",
         config.WEBAPP_HOST,

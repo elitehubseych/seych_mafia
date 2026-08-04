@@ -18,7 +18,10 @@ VK_ME_LINK = os.getenv(
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-SUPABASE_PASSWORD = os.getenv("SUPABASE_PASSWORD", "").strip()
+SUPABASE_PASSWORD = (
+    os.getenv("SUPABASE_PASSWORD", "").strip()
+    or os.getenv("SUPBASE_PASSWORD", "").strip()
+)
 SUPABASE_PUBLISHABLE_KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
 SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "").strip()
 SUPABASE_JWKS_URL = os.getenv("SUPABASE_JWKS_URL", "").strip()
