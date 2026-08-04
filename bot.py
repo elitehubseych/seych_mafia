@@ -79,11 +79,11 @@ async def _keepalive_loop(url: str) -> None:
             logger.warning("keepalive ping failed: %s", e)
 
 
-def main() -> None:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+async def _app_main() -> None:
+    loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     app = web.Application()
+
     async def _close_resources(_app: web.Application) -> None:
         await vk.close()
         await manager.db.close()
@@ -112,7 +112,7 @@ def main() -> None:
         "set" if config.SUPABASE_SECRET_KEY else "not set",
     )
     logger.info("SUPABASE_JWKS_URL: %s", "set" if config.SUPABASE_JWKS_URL else "not set")
-    loop.run_until_complete(manager.connect_db())
+    await manager.connect_db()
     if not manager.db.connected:
         logger.error(
             "Database connection failed. Set DATABASE_URL or SUPABASE_URL/SUPABASE_PASSWORD correctly."
@@ -125,11 +125,20 @@ def main() -> None:
         config.WEBAPP_PORT,
         config.CALLBACK_PATH,
     )
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host=config.WEBAPP_HOST, port=config.WEBAPP_PORT)
+    await site.start()
+
     try:
-        web.run_app(app, host=config.WEBAPP_HOST, port=config.WEBAPP_PORT, print=None)
-    except Exception:  # noqa: BLE001
-        logger.exception("Fatal: web server stopped unexpectedly")
-        raise
+        await asyncio.Event().wait()
+    finally:
+        await runner.cleanup()
+
+
+def main() -> None:
+    asyncio.run(_app_main())
 
 
 def _loop_exception_handler(loop, context: dict) -> None:

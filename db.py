@@ -50,7 +50,8 @@ def _resolve_ipv4_host(host: str, port: int) -> str | None:
 
 class Database:
     def __init__(self) -> None:
-        self.pool: "asyncpg.Pool" | None = None
+        self.database_url: str | None = None
+        self.ssl: str | None = None
         self.connected = False
 
     async def connect(self) -> None:
@@ -78,109 +79,104 @@ class Database:
         logger.info("Подключаюсь к базе данных: %s", safe_url)
         parsed = urllib.parse.urlparse(database_url)
         use_ssl = parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
-        create_pool_kwargs = {
-            "min_size": 1,
-            "max_size": 3,
-            "command_timeout": 10,
-        }
-        if use_ssl:
-            create_pool_kwargs["ssl"] = "require"
+        self.database_url = database_url
+        self.ssl = "require" if use_ssl else None
 
         try:
-            self.pool = await asyncpg.create_pool(database_url, **create_pool_kwargs)
-        except (OSError, asyncpg.PostgresError) as exc:
-            if isinstance(exc, OSError):
-                parsed = urllib.parse.urlparse(database_url)
-                if parsed.hostname and exc.errno in {101, 110, 113}:
-                    ipv4 = _resolve_ipv4_host(parsed.hostname, parsed.port or 5432)
-                    if ipv4:
-                        logger.info(
-                            "IPv6 не работает; пробую подключение к IPv4 %s",
-                            ipv4,
-                        )
-                        self.pool = await asyncpg.create_pool(
-                            user=parsed.username,
-                            password=parsed.password,
-                            database=(parsed.path or "/").lstrip("/") or "postgres",
-                            host=ipv4,
-                            port=parsed.port or 5432,
-                            ssl="require" if use_ssl else None,
-                            min_size=1,
-                            max_size=3,
-                            command_timeout=10,
-                        )
-                    else:
-                        raise
+            conn = await asyncpg.connect(database_url, timeout=10, ssl=self.ssl)
+        except OSError as exc:
+            if parsed.hostname and exc.errno in {101, 110, 113}:
+                ipv4 = _resolve_ipv4_host(parsed.hostname, parsed.port or 5432)
+                if ipv4:
+                    logger.info(
+                        "IPv6 не работает; пробую подключение к IPv4 %s",
+                        ipv4,
+                    )
+                    conn = await asyncpg.connect(
+                        user=parsed.username,
+                        password=parsed.password,
+                        database=(parsed.path or "/").lstrip("/") or "postgres",
+                        host=ipv4,
+                        port=parsed.port or 5432,
+                        timeout=10,
+                        ssl=self.ssl,
+                    )
                 else:
                     raise
             else:
                 raise
 
         try:
-            async with self.pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    create table if not exists users (
-                        user_id bigint primary key,
-                        nickname text,
-                        registered boolean not null default false
-                    )
-                    """
+            await conn.execute(
+                """
+                create table if not exists users (
+                    user_id bigint primary key,
+                    nickname text,
+                    registered boolean not null default false
                 )
+                """
+            )
             self.connected = True
             logger.info("Подключение к базе данных установлено")
         except Exception as exc:  # noqa: BLE001
             self.connected = False
             logger.warning("Не удалось подключиться к базе данных: %s", exc)
+        finally:
+            await conn.close()
 
     async def close(self) -> None:
-        if self.pool is not None:
-            await self.pool.close()
-            self.pool = None
         self.connected = False
 
-    async def load_users(self) -> tuple[dict[int, str], set[int]]:
-        if not self.connected or self.pool is None:
-            return {}, set()
+    async def _run(self, query: str, *args):
+        if not self.connected or not self.database_url:
+            return None
+        conn = await asyncpg.connect(self.database_url, timeout=10, ssl=self.ssl)
+        try:
+            return await conn.execute(query, *args)
+        finally:
+            await conn.close()
 
+    async def _fetch(self, query: str, *args):
+        if not self.connected or not self.database_url:
+            return []
+        conn = await asyncpg.connect(self.database_url, timeout=10, ssl=self.ssl)
+        try:
+            return await conn.fetch(query, *args)
+        finally:
+            await conn.close()
+
+    async def load_users(self) -> tuple[dict[int, str], set[int]]:
+        rows = await self._fetch("select user_id, nickname, registered from users")
         nicknames: dict[int, str] = {}
         registered: set[int] = set()
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch("select user_id, nickname, registered from users")
-            for row in rows:
-                uid = row["user_id"]
-                if row["nickname"]:
-                    nicknames[uid] = row["nickname"]
-                if row["registered"]:
-                    registered.add(uid)
+        for row in rows:
+            uid = row["user_id"]
+            if row["nickname"]:
+                nicknames[uid] = row["nickname"]
+            if row["registered"]:
+                registered.add(uid)
         return nicknames, registered
 
     async def set_nickname(self, user_id: int, nickname: str) -> None:
-        if not self.connected or self.pool is None:
-            return
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                """
-                insert into users (user_id, nickname, registered)
-                values ($1, $2, true)
-                on conflict (user_id) do update set
-                    nickname = excluded.nickname,
-                    registered = true
-                """,
-                user_id,
-                nickname,
-            )
+        await self._run(
+            """
+            insert into users (user_id, nickname, registered)
+            values ($1, $2, true)
+            on conflict (user_id) do update set
+                nickname = excluded.nickname,
+                registered = true
+            """,
+            user_id,
+            nickname,
+        )
 
     async def register(self, user_id: int) -> None:
-        if not self.connected or self.pool is None:
-            return
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                """
-                insert into users (user_id, registered)
-                values ($1, true)
-                on conflict (user_id) do update set
-                    registered = true
-                """,
-                user_id,
-            )
+        await self._run(
+            """
+            insert into users (user_id, registered)
+            values ($1, true)
+            on conflict (user_id) do update set
+                registered = true
+            """,
+            user_id,
+        )
