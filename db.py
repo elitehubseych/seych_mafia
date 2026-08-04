@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import socket
 import urllib.parse
 
 import config
@@ -26,10 +27,23 @@ def _build_supabase_postgres_url() -> str | None:
     if not host:
         return None
 
+    if host.endswith(".supabase.co") and not host.startswith("db."):
+        host = f"db.{host}"
+
     password = urllib.parse.quote_plus(config.SUPABASE_PASSWORD)
     user = "postgres"
     dbname = "postgres"
     return f"postgres://{user}:{password}@{host}:5432/{dbname}"
+
+def _resolve_ipv4_host(host: str, port: int) -> str | None:
+    try:
+        infos = socket.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM)
+        for family, socktype, proto, canonname, sockaddr in infos:
+            if family == socket.AF_INET:
+                return sockaddr[0]
+    except OSError:
+        return None
+    return None
 
 
 class Database:
@@ -51,6 +65,15 @@ class Database:
             logger.warning("asyncpg не установлен; нельзя подключиться к базе данных")
             return
 
+        safe_url = database_url
+        try:
+            parsed = urllib.parse.urlparse(database_url)
+            if parsed.password:
+                safe_url = database_url.replace(parsed.password, "*****")
+        except Exception:
+            safe_url = "[masked]"
+
+        logger.info("Подключаюсь к базе данных: %s", safe_url)
         try:
             self.pool = await asyncpg.create_pool(
                 database_url,
@@ -58,6 +81,31 @@ class Database:
                 max_size=3,
                 command_timeout=10,
             )
+        except OSError as exc:
+            parsed = urllib.parse.urlparse(database_url)
+            if parsed.hostname and exc.errno in {101, 110, 113}:
+                ipv4 = _resolve_ipv4_host(parsed.hostname, parsed.port or 5432)
+                if ipv4:
+                    logger.info(
+                        "IPv6 не работает; пробую подключение к IPv4 %s",
+                        ipv4,
+                    )
+                    self.pool = await asyncpg.create_pool(
+                        user=parsed.username,
+                        password=parsed.password,
+                        database=(parsed.path or "/").lstrip("/") or "postgres",
+                        host=ipv4,
+                        port=parsed.port or 5432,
+                        min_size=1,
+                        max_size=3,
+                        command_timeout=10,
+                    )
+                else:
+                    raise
+            else:
+                raise
+
+        try:
             async with self.pool.acquire() as conn:
                 await conn.execute(
                     """
