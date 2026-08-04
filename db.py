@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import urllib.parse
 
 import config
 
@@ -12,13 +13,38 @@ except ImportError:  # pragma: no cover
     asyncpg = None  # type: ignore[assignment]
 
 
+def _build_supabase_postgres_url() -> str | None:
+    if not config.SUPABASE_URL or not config.SUPABASE_PASSWORD:
+        return None
+
+    url = config.SUPABASE_URL.strip()
+    if url.startswith("postgres://") or url.startswith("postgresql://"):
+        return url
+
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or url
+    if not host:
+        return None
+
+    password = urllib.parse.quote_plus(config.SUPABASE_PASSWORD)
+    user = "postgres"
+    dbname = "postgres"
+    return f"postgres://{user}:{password}@{host}:5432/{dbname}"
+
+
 class Database:
     def __init__(self) -> None:
         self.pool: "asyncpg.Pool" | None = None
         self.connected = False
 
     async def connect(self) -> None:
-        if not config.DATABASE_URL:
+        database_url = config.DATABASE_URL
+        if not database_url:
+            database_url = _build_supabase_postgres_url()
+            if database_url:
+                logger.info("DATABASE_URL не задан; использую Supabase SUPABASE_URL/SUPABASE_PASSWORD")
+
+        if not database_url:
             logger.info("DATABASE_URL не задан; используется локальное хранилище")
             return
         if asyncpg is None:
@@ -27,7 +53,7 @@ class Database:
 
         try:
             self.pool = await asyncpg.create_pool(
-                config.DATABASE_URL,
+                database_url,
                 min_size=1,
                 max_size=3,
                 command_timeout=10,
