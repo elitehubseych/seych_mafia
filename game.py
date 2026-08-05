@@ -257,12 +257,22 @@ class Game:
                 )
             text += "Если коммисар погибнет — сержант займёт его место."
         elif role == Role.SERGEANT:
+            commissars = [p for p in self.alive_players if p.role == Role.COMMISSAR]
             text = (
                 f"{emoji} Ты Сержант — помощник комиссара!\n"
                 "Ты узнаёшь обо всех проверках коммисара. А если он погибнет — повышаешься по службе "
                 "и занимаешь его место.\n"
-                "Держись рядом с законом. Твоё время придёт!"
             )
+            if commissars:
+                text += (
+                    "Запомни своих союзников:\n"
+                    + "\n".join(
+                        f"🫂 {self._link(c)} — {ROLE_EMOJI[Role.COMMISSAR]} Коммисар"
+                        for c in commissars
+                    )
+                    + "\n\nКоммисар будет сообщать тебе о своих проверках.\n"
+                )
+            text += "Держись рядом с законом. Твоё время придёт!"
         elif role == Role.DOCTOR:
             text = (
                 f"{emoji} Ты Доктор — работник реанимации!\n"
