@@ -102,9 +102,9 @@ class VKAPI:
             if "error" in item:
                 logger.error("VK messages.send error for %s: %s", peer_id, item)
                 return None
-            return item.get("conversation_message_id") or item.get("message_id")
+            return item.get("message_id") or item.get("conversation_message_id")
         if isinstance(resp, dict):
-            return resp.get("conversation_message_id") or resp.get("message_id")
+            return resp.get("message_id") or resp.get("conversation_message_id")
         if isinstance(resp, int):
             return resp
         return None

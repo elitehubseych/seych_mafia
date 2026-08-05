@@ -29,6 +29,7 @@ config.LYNCH_DELAY = 0
 import game as game_mod
 from game import Game, NIGHT_ORDER
 from roles import MAFIA_SIDE, ROLE_CONFIG, Role
+from vk_api import VKAPI
 
 
 class FakeBot:
@@ -579,6 +580,67 @@ async def test_lynch_confirm_updates_counts():
     assert any("👍 (1)" in str(kb) for kb in g.bot.edited_keyboards), g.bot.edited_keyboards
     assert not any("Твой голос учтён" in t for t in g.bot.edited), g.bot.edited
     print("test_lynch_confirm_updates_counts OK")
+
+
+async def test_send_returns_global_message_id():
+    class C(VKAPI):
+        def __init__(self, resp):
+            super().__init__("fake_token")
+            self._resp = resp
+
+        async def call(self, method, **params):
+            return self._resp
+
+    vk = C([{"peer_id": 1, "message_id": 9001, "conversation_message_id": 5}])
+    assert await vk.send(123, "hi") == 9001, "для последующих правок нужен глобальный message_id"
+    print("test_send_returns_global_message_id OK")
+
+
+async def test_edit_uses_message_id_for_chats():
+    calls = []
+
+    class C(VKAPI):
+        async def call(self, method, **params):
+            calls.append((method, params))
+            return 1
+
+    vk = C("fake_token")
+    ok = await vk.edit(peer_id=2000000001, message_id=9001, text="x", keyboard={"inline": True, "buttons": []})
+    assert ok is True
+    method, params = calls[0]
+    assert method == "messages.edit"
+    assert params["message_id"] == 9001
+    assert "conversation_message_id" not in params
+    print("test_edit_uses_message_id_for_chats OK")
+
+
+async def test_edit_uses_conversation_message_id_for_dm_callback():
+    calls = []
+
+    class C(VKAPI):
+        async def call(self, method, **params):
+            calls.append((method, params))
+            return 1
+
+    vk = C("fake_token")
+    ok = await vk.edit(peer_id=123, text="x", conversation_message_id=7)
+    assert ok is True
+    method, params = calls[0]
+    assert params["conversation_message_id"] == 7
+    assert "message_id" not in params
+    print("test_edit_uses_conversation_message_id_for_dm_callback OK")
+
+
+async def test_registration_message_edits_on_join():
+    g = Game(chat_id=-1001, bot=FakeBot())
+    g.registration_message_id = 42
+    g.add_player(1000, "Анна")
+    g.add_player(1001, "Борис")
+    before = len(g.bot.edited)
+    await g.update_registration_message()
+    assert len(g.bot.edited) == before + 1, "список участников перерисовывается на месте"
+    assert any("Анна" in t and "Борис" in t for t in g.bot.edited), g.bot.edited
+    print("test_registration_message_edits_on_join OK")
 
 
 async def test_day_lynch():
@@ -1148,7 +1210,6 @@ async def main():
     await test_kamikaze_revenge_after_lynch()
     await test_kamikaze_revenge_saved_by_doctor()
     print("\nALL TESTS PASSED")
-
 
 if __name__ == "__main__":
     asyncio.run(main())
