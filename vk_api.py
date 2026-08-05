@@ -126,8 +126,13 @@ class VKAPI:
             params["message_id"] = message_id
         if keyboard is not None:
             params["keyboard"] = self._to_json(keyboard)
-        resp = await self.call("messages.edit", **params)
-        return resp is not None
+        for attempt in range(3):
+            resp = await self.call("messages.edit", **params)
+            if resp is not None:
+                return True
+            if attempt < 2:
+                await asyncio.sleep(0.4 + 0.6 * attempt)
+        return False
 
     async def is_dm_allowed(self, user_id: int) -> bool:
         try:
