@@ -28,6 +28,14 @@ config.LYNCH_DELAY = 0
 
 import game as game_mod
 from game import Game, NIGHT_ORDER
+from game_manager import manager
+from handlers import (
+    _parse_ban_duration,
+    _send_report,
+    cmd_bangame,
+    cmd_unbangame,
+    event_join,
+)
 from roles import MAFIA_SIDE, ROLE_CONFIG, Role
 from vk_api import VKAPI
 
@@ -46,6 +54,31 @@ class FakeBot:
         self.edited.append(text)
         self.edited_keyboards.append(keyboard)
         return True
+
+
+class FakeVK:
+    def __init__(self):
+        self.sent = []
+        self.snackbars = []
+
+    async def send(self, chat_id, text, keyboard=None, **kw):
+        self.sent.append((chat_id, text))
+        return len(self.sent)
+
+    async def edit(self, peer_id, message_id, text, keyboard=None, conversation_message_id=None):
+        return True
+
+    async def answer_event(self, event_id, user_id, peer_id, text):
+        self.snackbars.append(text)
+
+    async def get_user_name(self, user_id):
+        return f"Имя{user_id}"
+
+    async def is_dm_allowed(self, user_id):
+        return True
+
+    async def get_chat_title(self, peer_id):
+        return "Чат"
 
 
 def chat_msgs(g):
@@ -1171,6 +1204,106 @@ async def test_kamikaze_revenge_saved_by_doctor():
     print("test_kamikaze_revenge_saved_by_doctor OK")
 
 
+def test_parse_ban_duration():
+    text, until = _parse_ban_duration("1 день")
+    assert text == "1 день" and until is not None
+    text, until = _parse_ban_duration("10")
+    assert text == "10" and until is not None
+    text, until = _parse_ban_duration("1 час")
+    assert until is not None
+    text, until = _parse_ban_duration("")
+    assert text == "навсегда" and until is None
+    text, until = _parse_ban_duration("мусор")
+    assert until is None
+    print("test_parse_ban_duration OK")
+
+
+async def test_bangame_bans_snackbar_and_chat_message():
+    config.DEV_ID = "9000"
+    manager.bans.clear()
+    vk = FakeVK()
+    g = Game(chat_id=-1001, bot=FakeBot())
+    g.add_player(5001, "Жертва")
+    manager.games[g.chat_id] = g
+
+    await cmd_bangame(vk, g.chat_id, 9000, "/bangame 5001 1 день\nЧиты", {})
+    assert manager.get_ban(5001) is not None
+    texts = [t for cid, t in vk.sent]
+    assert any("был заблокирован во вселенной игры" in t for t in texts), texts
+    assert any("был заблокирован доступ к игре на 1 день" in t for t in texts), texts
+    assert any("Причина: Читы" in t for t in texts), texts
+
+    await event_join(vk, g, g.chat_id, 5001, 1)
+    assert vk.snackbars, "баненный игрок получает снэкбар"
+    assert "Вы были забанены в игре на 1 день" in vk.snackbars[-1], vk.snackbars
+    assert vk.snackbars[-1].count("\n") >= 1, "причина в снэкбаре"
+
+    await cmd_unbangame(vk, g.chat_id, 9000, "/unbangame 5001", {})
+    assert manager.get_ban(5001) is None
+    texts = [t for cid, t in vk.sent]
+    assert any("был разблокирован во вселенной игры" in t for t in texts), texts
+
+    manager.games.pop(g.chat_id, None)
+    manager.bans.clear()
+    config.DEV_ID = ""
+    print("test_bangame_bans_snackbar_and_chat_message OK")
+
+
+async def test_bangame_forever_and_ignored_for_others():
+    config.DEV_ID = "9000"
+    manager.bans.clear()
+    vk = FakeVK()
+    await cmd_bangame(vk, -1001, 777, "/bangame 5002\nТоксин", {})
+    assert not vk.sent, "не разработчик — молча игнорируем"
+    assert manager.get_ban(5002) is None
+
+    await cmd_bangame(vk, -1001, 9000, "/bangame 5002\nТоксин", {})
+    ban = manager.get_ban(5002)
+    assert ban is not None and ban["until"] is None, "без срока — бан навсегда"
+    assert ban["duration"] == "навсегда"
+
+    await event_join(vk, None, -1001, 5002, 2)
+    assert vk.snackbars and "навсегда" in vk.snackbars[-1], vk.snackbars
+
+    manager.bans.clear()
+    config.DEV_ID = ""
+    print("test_bangame_forever_and_ignored_for_others OK")
+
+
+async def test_report_to_dev():
+    config.DEV_ID = "9000"
+    vk = FakeVK()
+    await _send_report(vk, 1000, "Читер", {})
+    to_dev = [t for cid, t in vk.sent if cid == 9000]
+    assert to_dev and "Новый репорт от:" in to_dev[-1] and "Текст: Читер" in to_dev[-1]
+
+    vk.sent.clear()
+    await _send_report(vk, 1000, "смотри что делает?", {"from_id": 2000, "text": "смотри"})
+    to_dev = [t for cid, t in vk.sent if cid == 9000]
+    assert "Нарушитель:" in to_dev[-1], to_dev[-1]
+    assert "Реплай: смотри" in to_dev[-1], to_dev[-1]
+    assert "Текст: смотри что делает?" in to_dev[-1], to_dev[-1]
+
+    vk.sent.clear()
+    await _send_report(vk, 1000, "", {})
+    assert not vk.sent, "пустой репорт без реплая не отправляется"
+    config.DEV_ID = ""
+    print("test_report_to_dev OK")
+
+
+def test_dev_badge():
+    config.DEV_ID = "9000"
+    assert config.is_dev(9000) is True
+    assert config.is_dev(9999) is False
+    manager.nicknames[9000] = "Адик"
+    name = manager.nickname(9000, "Фолбэк")
+    assert name.startswith("🛠️") and "Адик" in name
+    assert not manager.nickname(9999, "Обычный").startswith("🛠️")
+    manager.nicknames.pop(9000, None)
+    config.DEV_ID = ""
+    print("test_dev_badge OK")
+
+
 async def main():
     test_role_configs()
     await test_kill_and_heal()
@@ -1209,6 +1342,11 @@ async def main():
     await test_inactivity_resets_when_playing()
     await test_kamikaze_revenge_after_lynch()
     await test_kamikaze_revenge_saved_by_doctor()
+    test_parse_ban_duration()
+    await test_bangame_bans_snackbar_and_chat_message()
+    await test_bangame_forever_and_ignored_for_others()
+    await test_report_to_dev()
+    test_dev_badge()
     print("\nALL TESTS PASSED")
 
 if __name__ == "__main__":

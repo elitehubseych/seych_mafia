@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 
 import config
 from game import Game
@@ -14,6 +16,34 @@ logger = logging.getLogger(__name__)
 
 CHAT_PREFIX = 2_000_000_000
 
+DURATION_UNITS = {
+    "минут": "minutes",
+    "минута": "minutes",
+    "минуту": "minutes",
+    "минуты": "minutes",
+    "час": "hours",
+    "часа": "hours",
+    "часов": "hours",
+    "день": "days",
+    "дня": "days",
+    "дней": "days",
+    "сутки": "days",
+    "суток": "days",
+    "месяц": "months",
+    "месяца": "months",
+    "месяцев": "months",
+    "год": "years",
+    "года": "years",
+    "лет": "years",
+}
+_MINUTES_PER = {
+    "minutes": 1,
+    "hours": 60,
+    "days": 1440,
+    "months": 43800,
+    "years": 525600,
+}
+
 
 def chat_peer_to_id(peer_id: int) -> int:
     return peer_id - CHAT_PREFIX
@@ -22,6 +52,145 @@ def chat_peer_to_id(peer_id: int) -> int:
 def _player_link(game: Game, uid: int) -> str:
     p = game.players.get(uid)
     return f"[id{uid}|{p.name}]" if p else "—"
+
+
+def _resolve_target_id(text: str, reply: dict) -> int | None:
+    if reply and isinstance(reply.get("from_id"), int) and reply.get("from_id", 0) > 0:
+        return int(reply["from_id"])
+    m = re.search(r"\[(?:id|club|public|screen)(\d+)\|", text)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"\bid(\d+)\b", text, flags=re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    for tok in text.split():
+        if tok.isdigit():
+            return int(tok)
+    return None
+
+
+def _remove_target_token(text: str, target: int) -> str:
+    rest = text
+    rest = re.sub(rf"\[(?:id|club|public|screen){target}\|[^\]]*\]", "", rest)
+    rest = re.sub(rf"\bid{target}\b", "", rest, flags=re.IGNORECASE)
+    rest = re.sub(rf"(?<![\w\d]){target}(?![\w\d])", "", rest)
+    return rest.strip()
+
+
+def _parse_ban_duration(text: str) -> tuple[str, object | None]:
+    text = (text or "").strip()
+    low = text.lower()
+    if not low or not re.match(r"^\d+\s*[а-яё]*$", low):
+        return "навсегда", None
+    m = re.match(r"^(\d+)(?:\s*([а-яё]+))?$", low)
+    num = int(m.group(1))
+    unit = m.group(2)
+    if unit and unit in DURATION_UNITS:
+        minutes = num * _MINUTES_PER[DURATION_UNITS[unit]]
+        until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+        return text, until
+    return text, datetime.now(timezone.utc) + timedelta(minutes=num)
+
+
+async def _name_link(vk: VKAPI, uid: int) -> str:
+    name = await display_name(vk, uid)
+    return f"[id{uid}|{name}]"
+
+
+async def _send_report(vk: VKAPI, user_id: int, text: str, reply: dict) -> None:
+    if not config.DEV_ID:
+        logger.info("DEV_ID не задан: репорт от %s не отправлен", user_id)
+        return
+    try:
+        dev_id = int(config.DEV_ID)
+    except (TypeError, ValueError):
+        logger.warning("DEV_ID некорректен: %r", config.DEV_ID)
+        return
+    body = text.strip()
+    violator_id = reply.get("from_id") if reply else None
+    if isinstance(violator_id, int) and violator_id > 0:
+        lines = [
+            f"Новый репорт от: {await _name_link(vk, user_id)}",
+            f"Нарушитель: {await _name_link(vk, violator_id)}",
+        ]
+        reply_text = (reply.get("text") or "").strip()
+        if reply_text:
+            lines.append(f"Реплай: {reply_text}")
+        if body:
+            lines.append(f"Текст: {body}")
+    else:
+        if not body:
+            return
+        lines = [
+            f"Новый репорт от: {await _name_link(vk, user_id)}",
+            f"Текст: {body}",
+        ]
+    await vk.send(dev_id, "\n".join(lines))
+
+
+async def cmd_bangame(
+    vk: VKAPI,
+    peer_id: int,
+    user_id: int,
+    text: str,
+    reply: dict,
+) -> None:
+    if not config.is_dev(user_id):
+        return
+    rest = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    target = _resolve_target_id(rest, reply)
+    if target is None:
+        await vk.send(
+            peer_id,
+            "ℹ️ Не нашёл игрока. Укажи id, @упоминание или ответь на сообщение.",
+        )
+        return
+    rest = _remove_target_token(rest, target)
+    lines = rest.splitlines() or [""]
+    duration_text, until = _parse_ban_duration(lines[0].strip())
+    reason = "\n".join(lines[1:]).strip()
+    await manager.ban(target, reason, duration_text, until)
+    link = await _name_link(vk, target)
+    await vk.send(
+        peer_id,
+        f"{link} был заблокирован во вселенной игры\n"
+        f"Срок: {duration_text}\n"
+        f"Причина: {reason or '—'}",
+    )
+    game = manager.game_for_user(target)
+    if game:
+        p = game.players.get(target)
+        nick = f"[id{target}|{p.name}]" if p else link
+        if until is None:
+            chat_text = f"{nick} был заблокирован доступ к игре навсегда\nПричина: {reason or '—'}"
+        else:
+            chat_text = (
+                f"{nick} был заблокирован доступ к игре на {duration_text}\n"
+                f"Причина: {reason or '—'}"
+            )
+        await vk.send(game.chat_id, chat_text)
+
+
+async def cmd_unbangame(
+    vk: VKAPI,
+    peer_id: int,
+    user_id: int,
+    text: str,
+    reply: dict,
+) -> None:
+    if not config.is_dev(user_id):
+        return
+    rest = text.split(maxsplit=1)[1].strip() if " " in text else ""
+    target = _resolve_target_id(rest, reply)
+    if target is None:
+        await vk.send(
+            peer_id,
+            "ℹ️ Не нашёл игрока. Укажи id, @упоминание или ответь на сообщение.",
+        )
+        return
+    await manager.unban(target)
+    link = await _name_link(vk, target)
+    await vk.send(peer_id, f"{link} был разблокирован во вселенной игры")
 
 
 async def _confirm_event_message(
@@ -63,6 +232,7 @@ async def handle_message_new(vk: VKAPI, obj: dict) -> None:
     peer_id = msg.get("peer_id")
     from_id = msg.get("from_id")
     text = (msg.get("text") or "").strip()
+    reply = msg.get("reply_message") or {}
     if peer_id is None or from_id is None:
         return
 
@@ -70,13 +240,13 @@ async def handle_message_new(vk: VKAPI, obj: dict) -> None:
     if is_chat:
         game = manager.game_for_chat(peer_id)
         if text.startswith("/"):
-            await handle_chat_command(vk, peer_id, from_id, text)
+            await handle_chat_command(vk, peer_id, from_id, text, reply)
         elif game and game.state == "night":
             await handle_night_chat_message(vk, game, from_id, text)
         return
 
     if text.startswith("/"):
-        await handle_private_command(vk, from_id, text)
+        await handle_private_command(vk, from_id, text, reply)
         return
     game = manager.game_for_user(from_id)
     if game and await game.submit_last_words(from_id, text):
@@ -92,10 +262,13 @@ async def handle_message_new(vk: VKAPI, obj: dict) -> None:
     await handle_private_text(vk, from_id)
 
 
-async def handle_chat_command(vk: VKAPI, peer_id: int, user_id: int, text: str) -> None:
+async def handle_chat_command(
+    vk: VKAPI, peer_id: int, user_id: int, text: str, reply: dict | None = None
+) -> None:
     parts = text.split()
     cmd = parts[0].lower()
     game = manager.game_for_chat(peer_id)
+    reply = reply or {}
     if cmd in {"/start", "/новость", "/начать"} and len(parts) == 1:
         await cmd_start_group(vk, peer_id, user_id, game)
     elif cmd == "/startadmin":
@@ -104,6 +277,12 @@ async def handle_chat_command(vk: VKAPI, peer_id: int, user_id: int, text: str) 
         await cmd_startbot(vk, peer_id, user_id, game)
     elif cmd == "/stopadmin":
         await cmd_stopadmin(vk, peer_id, user_id, game)
+    elif cmd in {"/rep", "/report"}:
+        await _send_report(vk, user_id, " ".join(parts[1:]), reply)
+    elif cmd == "/bangame":
+        await cmd_bangame(vk, peer_id, user_id, text, reply)
+    elif cmd == "/unbangame":
+        await cmd_unbangame(vk, peer_id, user_id, text, reply)
     elif cmd == "/help":
         await vk.send(peer_id, HELP_TEXT)
 
@@ -196,9 +375,12 @@ async def cmd_stopadmin(
     await game.end_game("stop")
 
 
-async def handle_private_command(vk: VKAPI, user_id: int, text: str) -> None:
+async def handle_private_command(
+    vk: VKAPI, user_id: int, text: str, reply: dict | None = None
+) -> None:
     parts = text.split()
     cmd = parts[0].lower()
+    reply = reply or {}
     if cmd == "/setnick":
         nick = " ".join(parts[1:]).strip()
         if not nick:
@@ -209,6 +391,12 @@ async def handle_private_command(vk: VKAPI, user_id: int, text: str) -> None:
         if game and user_id in game.players:
             game.players[user_id].name = nick
         await vk.send(user_id, f"✅ Никнейм изменён: {nick}")
+    elif cmd in {"/rep", "/report"}:
+        await _send_report(vk, user_id, " ".join(parts[1:]), reply)
+    elif cmd == "/bangame":
+        await cmd_bangame(vk, user_id, user_id, text, reply)
+    elif cmd == "/unbangame":
+        await cmd_unbangame(vk, user_id, user_id, text, reply)
     elif cmd == "/help":
         await vk.send(user_id, HELP_TEXT)
     else:
@@ -341,6 +529,14 @@ async def handle_message_event(vk: VKAPI, obj: dict) -> None:
 async def event_join(
     vk: VKAPI, game: Game | None, peer_id: int, user_id: int, event_id: int
 ) -> None:
+    ban = manager.get_ban(user_id)
+    if ban:
+        if ban["until"] is None:
+            msg = f"Вы были забанены в игре навсегда\nПричина: {ban['reason'] or '—'}"
+        else:
+            msg = f"Вы были забанены в игре на {ban['duration']}\nПричина: {ban['reason'] or '—'}"
+        await vk.answer_event(event_id, user_id, peer_id, msg)
+        return
     if not game or game.state != "waiting":
         await vk.answer_event(event_id, user_id, peer_id, "ℹ️ Игра уже началась или не найдена.")
         return
@@ -377,6 +573,7 @@ HELP_TEXT = (
     "🎭 Бот Мафия\n\n"
     "• /start — начать регистрацию в чате\n"
     "• /setnick Ник — сменить никнейм (в ЛС)\n"
+    "• /rep текст — отправить жалобу разработчику (можно ответом на сообщение)\n"
     "• /startadmin — принудительно начать игру (админ)\n"
     "• /startbot — заполнить места ботами и начать (админ, для теста)\n"
     "• /stopadmin — завершить игру (админ)\n\n"

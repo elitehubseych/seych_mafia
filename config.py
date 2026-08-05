@@ -11,10 +11,19 @@ VK_CONFIRMATION = os.getenv("VK_CONFIRMATION", "").strip()
 VK_SECRET = os.getenv("VK_SECRET", "").strip()
 VK_API_VERSION = os.getenv("VK_API_VERSION", "5.199")
 VK_GROUP_ID = os.getenv("VK_GROUP_ID", "").strip()
+DEV_ID = os.getenv("DEV_ID", "").strip()
+DEV_EMOJI = "🛠️"
 VK_ME_LINK = os.getenv(
     "VK_ME_LINK",
     f"https://vk.me/club{VK_GROUP_ID}" if VK_GROUP_ID else "https://vk.me/club233542237",
 )
+
+
+def is_dev(user_id: int) -> bool:
+    try:
+        return bool(DEV_ID) and int(user_id) == int(DEV_ID)
+    except (TypeError, ValueError):
+        return False
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()

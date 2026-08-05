@@ -116,6 +116,16 @@ class Database:
                 )
                 """
             )
+            await conn.execute(
+                """
+                create table if not exists bans (
+                    user_id bigint primary key,
+                    reason text not null default '',
+                    duration_text text not null default 'навсегда',
+                    until timestamptz
+                )
+                """
+            )
             self.connected = True
             logger.info("Подключение к базе данных установлено")
         except Exception as exc:  # noqa: BLE001
@@ -180,3 +190,37 @@ class Database:
             """,
             user_id,
         )
+
+    async def load_bans(self) -> dict[int, tuple[str, str, object | None]]:
+        rows = await self._fetch(
+            "select user_id, reason, duration_text, until from bans"
+        )
+        bans: dict[int, tuple[str, str, object | None]] = {}
+        for row in rows:
+            bans[row["user_id"]] = (row["reason"], row["duration_text"], row["until"])
+        return bans
+
+    async def set_ban(
+        self,
+        user_id: int,
+        reason: str,
+        duration_text: str,
+        until: object | None,
+    ) -> None:
+        await self._run(
+            """
+            insert into bans (user_id, reason, duration_text, until)
+            values ($1, $2, $3, $4)
+            on conflict (user_id) do update set
+                reason = excluded.reason,
+                duration_text = excluded.duration_text,
+                until = excluded.until
+            """,
+            user_id,
+            reason,
+            duration_text,
+            until,
+        )
+
+    async def remove_ban(self, user_id: int) -> None:
+        await self._run("delete from bans where user_id = $1", user_id)
