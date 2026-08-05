@@ -35,6 +35,7 @@ class FakeBot:
     def __init__(self):
         self.sent = []
         self.edited = []
+        self.edited_keyboards = []
 
     async def send(self, chat_id, text, keyboard=None, **kw):
         self.sent.append((chat_id, text))
@@ -42,6 +43,7 @@ class FakeBot:
 
     async def edit(self, peer_id, message_id, text, keyboard=None, conversation_message_id=None):
         self.edited.append(text)
+        self.edited_keyboards.append(keyboard)
         return True
 
 
@@ -495,6 +497,66 @@ async def test_commissar_mode_edits_same_message():
     assert len(g.bot.edited) == edited_before + 1, "режим должен редактировать текущее сообщение"
     assert len(g.bot.sent) == sent_before, "не должно появляться новое сообщение"
     print("test_commissar_mode_edits_same_message OK")
+
+
+async def test_guest_message_shows_don_when_don_decides():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("target", 1007),
+        1001: ("skip",), 1002: ("skip",),
+        1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
+    })
+    assert not g.players[1007].alive, "дон убивает выбранную жертву"
+    guests = [l for l in "\n".join(chat_msgs(g)).splitlines() if "в гостях был" in l]
+    assert any("🤵🏻 Дон" in l for l in guests), guests
+    assert not any("🤵🏼 Мафия" in l for l in guests), guests
+    print("test_guest_message_shows_don_when_don_decides OK")
+
+
+async def test_guest_message_shows_mafia_when_don_skips():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",),
+        1001: ("target", 1007), 1002: ("target", 1007),
+        1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
+    })
+    assert not g.players[1007].alive, "при пропуске дона мафия убивает"
+    guests = [l for l in "\n".join(chat_msgs(g)).splitlines() if "в гостях был" in l]
+    assert any("🤵🏼 Мафия" in l for l in guests), guests
+    assert not any("🤵🏻 Дон" in l for l in guests), guests
+    print("test_guest_message_shows_mafia_when_don_skips OK")
+
+
+async def test_lynch_confirm_updates_counts():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN, 1008: Role.CITIZEN,
+        1009: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",), 1001: ("skip",), 1002: ("skip",),
+        1003: ("mode", "check", 1001), 1004: ("skip",), 1005: ("skip",),
+        1006: ("skip",),
+    })
+    assert g.state == "voting"
+    for p in g.alive_players:
+        await g.submit_vote(p.user_id, 1001)
+    await g.resolve_votes()
+    assert g.state == "confirm"
+    await g.submit_confirm(1000, "like")
+    assert any("Вы уверены" in t for t in g.bot.edited), g.bot.edited
+    assert any("👍 (1)" in str(kb) for kb in g.bot.edited_keyboards), g.bot.edited_keyboards
+    assert not any("Твой голос учтён" in t for t in g.bot.edited), g.bot.edited
+    print("test_lynch_confirm_updates_counts OK")
 
 
 async def test_day_lynch():

@@ -329,8 +329,6 @@ async def handle_message_event(vk: VKAPI, obj: dict) -> None:
             return
         ok = await game.submit_confirm(user_id, vote)
         await vk.answer_event(event_id, user_id, peer_id, "✅ Засчитано" if ok else "⛔ Ты уже голосовал")
-        if ok:
-            await _confirm_event_message(vk, obj, "✅ Твой голос учтён.")
 
 
 async def event_join(

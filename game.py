@@ -857,6 +857,7 @@ class Game:
         mistress_blocks_com = bool(mis_act and mis_act.target == (commissar.user_id if commissar else None))
 
         kill_target = None
+        killer_is_don = False
         if not mistress_blocks_don:
             if don_target is not None:
                 if (
@@ -868,6 +869,7 @@ class Game:
                     kill_target = mafia_target
                 else:
                     kill_target = don_target
+                    killer_is_don = True
             else:
                 kill_target = mafia_target
 
@@ -889,7 +891,7 @@ class Game:
 
         hits: dict[int, list[str]] = {}
         if kill_target:
-            hits.setdefault(kill_target, []).append("mafia")
+            hits.setdefault(kill_target, []).append("don" if killer_is_don else "mafia")
         if com_target:
             hits.setdefault(com_target, []).append("com")
         if mani_target:
@@ -975,6 +977,8 @@ class Game:
                 morning.append(msg)
             else:
                 killer_roles = []
+                if "don" in kinds:
+                    killer_roles.append(f"{ROLE_EMOJI[Role.DON]} {ROLE_RU[Role.DON]}")
                 if "mafia" in kinds:
                     killer_roles.append(f"{ROLE_EMOJI[Role.MAFIA]} {ROLE_RU[Role.MAFIA]}")
                 if "com" in kinds:
