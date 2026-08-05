@@ -37,13 +37,13 @@ async def _confirm_event_message(
         logger.warning("message_event without peer_id/message_id: %s", obj)
         return
     kb = keyboard if keyboard is not None else {"inline": True, "buttons": []}
+    if message_id is not None:
+        if await vk.edit(peer_id, message_id=message_id, text=text, keyboard=kb):
+            return
     if conversation_message_id is not None:
         if await vk.edit(
             peer_id, conversation_message_id=conversation_message_id, text=text, keyboard=kb
         ):
-            return
-    if message_id is not None:
-        if await vk.edit(peer_id, message_id=message_id, text=text, keyboard=kb):
             return
     logger.warning(
         "confirm edit failed for peer_id=%s conversation_message_id=%s message_id=%s",

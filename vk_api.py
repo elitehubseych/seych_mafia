@@ -120,10 +120,10 @@ class VKAPI:
         params = {"peer_id": peer_id}
         if text is not None:
             params["message"] = text
-        if conversation_message_id is not None:
-            params["conversation_message_id"] = conversation_message_id
-        elif message_id is not None:
+        if message_id is not None:
             params["message_id"] = message_id
+        elif conversation_message_id is not None:
+            params["conversation_message_id"] = conversation_message_id
         if keyboard is not None:
             params["keyboard"] = self._to_json(keyboard)
         for attempt in range(3):
@@ -148,13 +148,18 @@ class VKAPI:
 
     async def answer_event(self, event_id: int, user_id: int, peer_id: int, text: str) -> None:
         event_data = json.dumps({"type": "show_snackbar", "text": text}, ensure_ascii=False)
-        await self.call(
-            "messages.sendMessageEventAnswer",
-            event_id=event_id,
-            user_id=user_id,
-            peer_id=peer_id,
-            event_data=event_data,
-        )
+        for attempt in range(3):
+            resp = await self.call(
+                "messages.sendMessageEventAnswer",
+                event_id=event_id,
+                user_id=user_id,
+                peer_id=peer_id,
+                event_data=event_data,
+            )
+            if resp is not None:
+                return
+            if attempt < 2:
+                await asyncio.sleep(0.3 + 0.4 * attempt)
 
     async def is_chat_admin(self, peer_id: int, user_id: int) -> bool:
         resp = await self.call("messages.getConversationMembers", peer_id=peer_id)
