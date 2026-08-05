@@ -5,6 +5,7 @@ import json
 import logging
 import random
 import ssl
+import time
 
 import aiohttp
 
@@ -14,6 +15,10 @@ logger = logging.getLogger(__name__)
 
 VK_TIMEOUT = aiohttp.ClientTimeout(total=10, connect=8, sock_read=10)
 VK_REQUEST_TIMEOUT = 12.0
+
+# Минимальный интервал между сообщениями/правками одному и тому же игроку:
+# VK наказывает за флуд ошибкой 9 (Flood control).
+VK_MIN_PEER_INTERVAL = 1.2
 
 
 def _make_connector() -> aiohttp.TCPConnector:
@@ -32,6 +37,9 @@ class VKAPI:
         self.api_version = api_version
         self._session: aiohttp.ClientSession | None = None
         self._names: dict[int, str] = {}
+        self._last_error_code: int | None = None
+        self._peer_locks: dict[int, asyncio.Lock] = {}
+        self._peer_last_call: dict[int, float] = {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -79,11 +87,38 @@ class VKAPI:
             return None
         if "error" in data:
             err = data["error"]
+            self._last_error_code = err.get("error_code")
             logger.error(
                 "VK API error %s [%s]: %s", method, err.get("error_code"), err.get("error_msg")
             )
             return None
+        self._last_error_code = None
         return data.get("response")
+
+    async def _gate(self, peer_id: int) -> None:
+        lock = self._peer_locks.setdefault(peer_id, asyncio.Lock())
+        async with lock:
+            last = self._peer_last_call.get(peer_id, 0.0)
+            wait = VK_MIN_PEER_INTERVAL - (time.monotonic() - last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._peer_last_call[peer_id] = time.monotonic()
+
+    async def _call_throttled(
+        self, peer_id: int, fn, retries: int = 4
+    ):
+        resp = None
+        for attempt in range(retries):
+            await self._gate(peer_id)
+            resp = await fn()
+            if resp is not None:
+                return resp
+            if attempt < retries - 1:
+                if self._last_error_code == 9:
+                    await asyncio.sleep(2.5 + 2.5 * attempt)
+                else:
+                    await asyncio.sleep(0.4 + 0.3 * attempt)
+        return resp
 
     async def send(self, peer_id: int, text: str, keyboard=None, **extra) -> int | None:
         params = {
@@ -94,7 +129,11 @@ class VKAPI:
         if keyboard is not None:
             params["keyboard"] = self._to_json(keyboard)
         params.update(extra)
-        resp = await self.call("messages.send", **params)
+
+        async def _do():
+            return await self.call("messages.send", **params)
+
+        resp = await self._call_throttled(peer_id, _do)
         if isinstance(resp, list):
             if not resp:
                 return None
@@ -126,13 +165,11 @@ class VKAPI:
             params["conversation_message_id"] = conversation_message_id
         if keyboard is not None:
             params["keyboard"] = self._to_json(keyboard)
-        for attempt in range(3):
-            resp = await self.call("messages.edit", **params)
-            if resp is not None:
-                return True
-            if attempt < 2:
-                await asyncio.sleep(0.4 + 0.6 * attempt)
-        return False
+
+        async def _do():
+            return await self.call("messages.edit", **params)
+
+        return await self._call_throttled(peer_id, _do) is not None
 
     async def is_dm_allowed(self, user_id: int) -> bool:
         try:
@@ -148,18 +185,17 @@ class VKAPI:
 
     async def answer_event(self, event_id: int, user_id: int, peer_id: int, text: str) -> None:
         event_data = json.dumps({"type": "show_snackbar", "text": text}, ensure_ascii=False)
-        for attempt in range(3):
-            resp = await self.call(
+
+        async def _do():
+            return await self.call(
                 "messages.sendMessageEventAnswer",
                 event_id=event_id,
                 user_id=user_id,
                 peer_id=peer_id,
                 event_data=event_data,
             )
-            if resp is not None:
-                return
-            if attempt < 2:
-                await asyncio.sleep(0.3 + 0.4 * attempt)
+
+        await self._call_throttled(peer_id, _do)
 
     async def is_chat_admin(self, peer_id: int, user_id: int) -> bool:
         resp = await self.call("messages.getConversationMembers", peer_id=peer_id)
