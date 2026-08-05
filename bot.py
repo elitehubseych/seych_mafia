@@ -15,6 +15,22 @@ from game_manager import manager
 from handlers import handle_message_event, handle_message_new
 from vk_api import vk
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _deployed_commit() -> str:
+    try:
+        import subprocess
+
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=BASE_DIR,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -80,6 +96,7 @@ async def _keepalive_loop(url: str) -> None:
 
 
 async def _app_main() -> None:
+    logger.info("Starting bot (commit %s, VK API %s)", _deployed_commit(), config.VK_API_VERSION)
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     app = web.Application()

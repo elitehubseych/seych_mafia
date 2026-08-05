@@ -43,7 +43,14 @@ async def _confirm_event_message(
         ):
             return
     if message_id is not None:
-        await vk.edit(peer_id, message_id=message_id, text=text, keyboard=kb)
+        if await vk.edit(peer_id, message_id=message_id, text=text, keyboard=kb):
+            return
+    logger.warning(
+        "confirm edit failed for peer_id=%s conversation_message_id=%s message_id=%s",
+        peer_id,
+        conversation_message_id,
+        message_id,
+    )
 
 
 async def display_name(vk: VKAPI, user_id: int) -> str:
