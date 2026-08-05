@@ -36,16 +36,14 @@ async def _confirm_event_message(
     if not peer_id or (conversation_message_id is None and message_id is None):
         logger.warning("message_event without peer_id/message_id: %s", obj)
         return
-    try:
-        await vk.edit(
-            peer_id,
-            message_id,
-            text,
-            keyboard=keyboard if keyboard is not None else "",
-            conversation_message_id=conversation_message_id,
-        )
-    except Exception:  # noqa: BLE001
-        logger.warning("edit event message failed", exc_info=True)
+    kb = keyboard if keyboard is not None else {"buttons": []}
+    if conversation_message_id is not None:
+        if await vk.edit(
+            peer_id, conversation_message_id=conversation_message_id, text=text, keyboard=kb
+        ):
+            return
+    if message_id is not None:
+        await vk.edit(peer_id, message_id=message_id, text=text, keyboard=kb)
 
 
 async def display_name(vk: VKAPI, user_id: int) -> str:

@@ -116,7 +116,7 @@ class VKAPI:
         text: str | None = None,
         keyboard=None,
         conversation_message_id: int | None = None,
-    ) -> None:
+    ) -> bool:
         params = {"peer_id": peer_id}
         if text is not None:
             params["message"] = text
@@ -126,7 +126,8 @@ class VKAPI:
             params["message_id"] = message_id
         if keyboard is not None:
             params["keyboard"] = self._to_json(keyboard)
-        await self.call("messages.edit", **params)
+        resp = await self.call("messages.edit", **params)
+        return resp is not None
 
     async def is_dm_allowed(self, user_id: int) -> bool:
         try:

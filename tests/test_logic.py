@@ -40,8 +40,9 @@ class FakeBot:
         self.sent.append((chat_id, text))
         return len(self.sent)
 
-    async def edit(self, peer_id, message_id, text, keyboard=None):
+    async def edit(self, peer_id, message_id, text, keyboard=None, conversation_message_id=None):
         self.edited.append(text)
+        return True
 
 
 def chat_msgs(g):
@@ -463,6 +464,39 @@ async def test_commissar_shoot():
     print("test_commissar_shoot OK")
 
 
+async def test_page_edits_same_message():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN,
+    })
+    await g.start_night()
+    sent_before = len(g.bot.sent)
+    edited_before = len(g.bot.edited)
+    ok = await g.resend_prompt(1000, "target", page=1, peer_id=1000, message_id=1, conversation_message_id=1)
+    assert ok is True, "перелистывание страниц в ночи"
+    assert len(g.bot.edited) == edited_before + 1, "страница должна редактировать текущее сообщение"
+    assert len(g.bot.sent) == sent_before, "не должно появляться новое сообщение"
+    print("test_page_edits_same_message OK")
+
+
+async def test_commissar_mode_edits_same_message():
+    g = make_game({
+        1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
+        1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
+        1006: Role.LAWYER, 1007: Role.CITIZEN,
+    })
+    await g.start_night()
+    sent_before = len(g.bot.sent)
+    edited_before = len(g.bot.edited)
+    ok = await g.submit_mode(1003, "check", peer_id=1003, message_id=2, conversation_message_id=2)
+    assert ok is True, "режим коммисара"
+    assert 1003 in g.night.commissar_mode, "режим запоминается"
+    assert len(g.bot.edited) == edited_before + 1, "режим должен редактировать текущее сообщение"
+    assert len(g.bot.sent) == sent_before, "не должно появляться новое сообщение"
+    print("test_commissar_mode_edits_same_message OK")
+
+
 async def test_day_lynch():
     g = make_game({
         1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
@@ -651,7 +685,9 @@ async def test_kamikaze_guest_message_shows_don_only_when_don_and_mafia_same_tar
     assert g.players[1009].alive is False, "камикадзе должен погибнуть"
     m = "\n".join(chat_msgs(g))
     assert "Говорят, у него в гостях был: 🤵🏻 Дон" in m, m
-    assert "Мафия" not in m, m
+    guest_lines = [l for l in m.splitlines() if l.startswith("Говорят, у него в гостях был:")]
+    assert any("🤵🏻" in l for l in guest_lines), m
+    assert not any("🤵🏼" in l for l in guest_lines), m
     print("test_kamikaze_guest_message_shows_don_only_when_don_and_mafia_same_target OK")
 
 

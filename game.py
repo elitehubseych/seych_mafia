@@ -545,13 +545,15 @@ class Game:
         text = "🕵️ Кого проверяем?" if mode == "check" else "🔫 В кого стреляем?"
         kb = players_kb(self.alive_players, exclude={uid})
         if peer_id is not None and (message_id is not None or conversation_message_id is not None):
-            await self.bot.edit(
+            ok = await self.bot.edit(
                 peer_id,
                 message_id,
                 text,
                 keyboard=kb,
                 conversation_message_id=conversation_message_id,
             )
+            if not ok:
+                await self.say(uid, text, keyboard=kb)
         else:
             await self.say(uid, text, keyboard=kb)
         return True
@@ -572,32 +574,36 @@ class Game:
                 text = "🕵️ Кого проверяем?" if mode == "check" else "🔫 В кого стреляем?"
                 kb = players_kb(self.alive_players, exclude={uid}, page=page)
                 if peer_id is not None and (message_id is not None or conversation_message_id is not None):
-                    await self.bot.edit(
+                    ok = await self.bot.edit(
                         peer_id,
                         message_id,
                         text,
                         keyboard=kb,
                         conversation_message_id=conversation_message_id,
                     )
+                    if not ok:
+                        await self.say(uid, text, keyboard=kb)
                 else:
                     await self.say(uid, text, keyboard=kb)
                 return True
             if peer_id is not None and (message_id is not None or conversation_message_id is not None):
                 text, kb = self._night_prompt_text_and_kb(self.players[uid], role, page)
-                await self.bot.edit(
+                ok = await self.bot.edit(
                     peer_id,
                     message_id,
                     text,
                     keyboard=kb,
                     conversation_message_id=conversation_message_id,
                 )
+                if not ok:
+                    await self.say(uid, text, keyboard=kb)
             else:
                 await self.send_night_prompt(self.players[uid], role, page=page)
             return True
         if self.state == "voting":
             p = self._p(uid)
             if p and p.alive and not p.blocked_vote and uid not in self.votes:
-                if peer_id is not None and message_id is not None:
+                if peer_id is not None and (message_id is not None or conversation_message_id is not None):
                     text = "🗳️ Собрание!\nЗа кого будем голосовать? (одна минута)"
                     kb = players_kb(
                         self.alive_players,
@@ -608,7 +614,15 @@ class Game:
                         skip_data="abstain",
                         page=page,
                     )
-                    await self.bot.edit(peer_id, message_id, text, keyboard=kb)
+                    ok = await self.bot.edit(
+                        peer_id,
+                        message_id,
+                        text,
+                        keyboard=kb,
+                        conversation_message_id=conversation_message_id,
+                    )
+                    if not ok:
+                        await self.say(p.user_id, text, keyboard=kb)
                 else:
                     await self.send_vote_prompt(p, page=page)
                 return True
