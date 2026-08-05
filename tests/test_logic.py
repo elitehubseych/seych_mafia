@@ -31,10 +31,12 @@ from game import Game, NIGHT_ORDER
 from game_manager import manager
 from handlers import (
     _parse_ban_duration,
+    _pending_ban_reason,
     _send_report,
     cmd_bangame,
     cmd_unbangame,
     event_join,
+    handle_message_new,
 )
 from roles import MAFIA_SIDE, ROLE_CONFIG, Role
 from vk_api import VKAPI
@@ -1270,6 +1272,37 @@ async def test_bangame_forever_and_ignored_for_others():
     print("test_bangame_forever_and_ignored_for_others OK")
 
 
+async def test_bangame_reason_as_next_message():
+    config.DEV_ID = "9000"
+    manager.bans.clear()
+    _pending_ban_reason.clear()
+    vk = FakeVK()
+    g = Game(chat_id=-1001, bot=FakeBot())
+    g.add_player(5003, "Жертва")
+    manager.games[g.chat_id] = g
+
+    await cmd_bangame(vk, g.chat_id, 9000, "/bangame 5003 1 час", {})
+    texts = [t for cid, t in vk.sent]
+    assert any("Напиши причину бана" in t for t in texts), texts
+    assert manager.get_ban(5003) is None, "бан не применяется до причины"
+
+    await handle_message_new(
+        vk,
+        {"message": {"peer_id": g.chat_id, "from_id": 9000, "text": "Спам"}},
+    )
+    ban = manager.get_ban(5003)
+    assert ban is not None and ban["reason"] == "Спам", ban
+    texts = [t for cid, t in vk.sent]
+    assert any("Причина: Спам" in t for t in texts), texts
+    assert any("был заблокирован доступ к игре на 1 час" in t for t in texts), texts
+
+    manager.games.pop(g.chat_id, None)
+    manager.bans.clear()
+    _pending_ban_reason.clear()
+    config.DEV_ID = ""
+    print("test_bangame_reason_as_next_message OK")
+
+
 async def test_report_to_dev():
     config.DEV_ID = "9000"
     vk = FakeVK()
@@ -1345,6 +1378,7 @@ async def main():
     test_parse_ban_duration()
     await test_bangame_bans_snackbar_and_chat_message()
     await test_bangame_forever_and_ignored_for_others()
+    await test_bangame_reason_as_next_message()
     await test_report_to_dev()
     test_dev_badge()
     print("\nALL TESTS PASSED")

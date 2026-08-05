@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 CHAT_PREFIX = 2_000_000_000
 
+_pending_ban_reason: dict[int, dict] = {}
+
 DURATION_UNITS = {
     "минут": "minutes",
     "минута": "minutes",
@@ -77,19 +79,29 @@ def _remove_target_token(text: str, target: int) -> str:
     return rest.strip()
 
 
+def _split_duration_reason(line: str) -> tuple[str, object | None, str]:
+    line = (line or "").strip()
+    tokens = line.split()
+    if not tokens:
+        return "навсегда", None, ""
+    if tokens[0].isdigit():
+        num = int(tokens[0])
+        rest = tokens[1:]
+        if rest and rest[0].lower() in DURATION_UNITS:
+            unit = rest[0]
+            minutes = num * _MINUTES_PER[DURATION_UNITS[unit.lower()]]
+            until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+            return f"{tokens[0]} {unit}", until, " ".join(rest[1:])
+        until = datetime.now(timezone.utc) + timedelta(minutes=num)
+        return tokens[0], until, " ".join(rest)
+    if tokens[0].lower() in {"навсегда", "навечно"}:
+        return "навсегда", None, " ".join(tokens[1:])
+    return "навсегда", None, line
+
+
 def _parse_ban_duration(text: str) -> tuple[str, object | None]:
-    text = (text or "").strip()
-    low = text.lower()
-    if not low or not re.match(r"^\d+\s*[а-яё]*$", low):
-        return "навсегда", None
-    m = re.match(r"^(\d+)(?:\s*([а-яё]+))?$", low)
-    num = int(m.group(1))
-    unit = m.group(2)
-    if unit and unit in DURATION_UNITS:
-        minutes = num * _MINUTES_PER[DURATION_UNITS[unit]]
-        until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
-        return text, until
-    return text, datetime.now(timezone.utc) + timedelta(minutes=num)
+    duration_text, until, _ = _split_duration_reason(text)
+    return duration_text, until
 
 
 async def _name_link(vk: VKAPI, uid: int) -> str:
@@ -146,9 +158,30 @@ async def cmd_bangame(
         )
         return
     rest = _remove_target_token(rest, target)
-    lines = rest.splitlines() or [""]
-    duration_text, until = _parse_ban_duration(lines[0].strip())
-    reason = "\n".join(lines[1:]).strip()
+    duration_text, until, reason = _split_duration_reason(rest)
+    if not reason:
+        _pending_ban_reason[user_id] = {
+            "peer_id": peer_id,
+            "target": target,
+            "duration": duration_text,
+            "until": until,
+        }
+        await vk.send(
+            peer_id,
+            "ℹ️ Напиши причину бана следующим сообщением (или любую команду, чтобы отменить).",
+        )
+        return
+    await _apply_ban(vk, peer_id, target, duration_text, until, reason)
+
+
+async def _apply_ban(
+    vk: VKAPI,
+    peer_id: int,
+    target: int,
+    duration_text: str,
+    until: object | None,
+    reason: str,
+) -> None:
     await manager.ban(target, reason, duration_text, until)
     link = await _name_link(vk, target)
     await vk.send(
@@ -234,6 +267,18 @@ async def handle_message_new(vk: VKAPI, obj: dict) -> None:
     text = (msg.get("text") or "").strip()
     reply = msg.get("reply_message") or {}
     if peer_id is None or from_id is None:
+        return
+
+    pending = _pending_ban_reason.pop(from_id, None)
+    if pending is not None and not text.startswith("/"):
+        await _apply_ban(
+            vk,
+            pending["peer_id"],
+            pending["target"],
+            pending["duration"],
+            pending["until"],
+            text,
+        )
         return
 
     is_chat = peer_id >= CHAT_PREFIX
