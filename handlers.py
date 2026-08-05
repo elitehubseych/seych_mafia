@@ -119,7 +119,15 @@ async def _send_report(vk: VKAPI, user_id: int, text: str, reply: dict) -> None:
         logger.warning("DEV_ID некорректен: %r", config.DEV_ID)
         return
     body = text.strip()
-    violator_id = reply.get("from_id") if reply else None
+    reply = reply or {}
+    logger.info(
+        "report from %s text=%r reply_keys=%s reply_from=%r",
+        user_id,
+        body,
+        sorted(reply.keys()),
+        reply.get("from_id"),
+    )
+    violator_id = reply.get("from_id")
     if isinstance(violator_id, int) and violator_id > 0:
         lines = [
             f"Новый репорт от: {await _name_link(vk, user_id)}",
@@ -194,14 +202,31 @@ async def _apply_ban(
     if game:
         p = game.players.get(target)
         nick = f"[id{target}|{p.name}]" if p else link
-        if until is None:
-            chat_text = f"{nick} был заблокирован доступ к игре навсегда\nПричина: {reason or '—'}"
-        else:
-            chat_text = (
-                f"{nick} был заблокирован доступ к игре на {duration_text}\n"
-                f"Причина: {reason or '—'}"
+        if p and game.state != "waiting" and p.alive:
+            p.alive = False
+            p.banned = True
+            if until is None:
+                chat_text = f"{nick} был заблокирован доступ к игре навсегда\nПричина: {reason or '—'}"
+            else:
+                chat_text = (
+                    f"{nick} был заблокирован доступ к игре на {duration_text}\n"
+                    f"Причина: {reason or '—'}"
+                )
+            await vk.send(game.chat_id, chat_text)
+            await vk.send(
+                target,
+                "💀 Тебя убили!\nНапиши последние слова — город их услышит.",
             )
-        await vk.send(game.chat_id, chat_text)
+            return
+        if p and game.state == "waiting":
+            game.players.pop(target, None)
+            await game.update_registration_message()
+    await vk.send(
+        target,
+        "🚫 Тебе был заблокирован доступ в игру.\n"
+        f"Срок: {duration_text}\n"
+        f"Причина: {reason or '—'}",
+    )
 
 
 async def cmd_unbangame(
@@ -266,6 +291,10 @@ async def handle_message_new(vk: VKAPI, obj: dict) -> None:
     from_id = msg.get("from_id")
     text = (msg.get("text") or "").strip()
     reply = msg.get("reply_message") or {}
+    if not reply:
+        fwd = msg.get("fwd_messages") or []
+        if fwd:
+            reply = fwd[0]
     if peer_id is None or from_id is None:
         return
 

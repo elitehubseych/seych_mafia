@@ -1314,7 +1314,10 @@ class Game:
             "Роли:",
         ]
         for p in sorted(self.players.values(), key=lambda x: x.number):
-            status = "жив" if p.alive else "мёртв"
+            if p.banned:
+                status = "забанен"
+            else:
+                status = "жив" if p.alive else "мёртв"
             role_txt = f"{ROLE_EMOJI[p.role]} {ROLE_RU[p.role]}" if p.role else "—"
             lines.append(f"{p.number}. {self._link(p)} — {role_txt} ({status})")
         lines.append("")

@@ -18,6 +18,7 @@ class Player:
     lynched: bool = False
     kamikaze_used: bool = False
     missed_nights: int = 0
+    banned: bool = False
 
 
 @dataclass

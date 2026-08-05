@@ -1226,6 +1226,9 @@ async def test_bangame_bans_snackbar_and_chat_message():
     vk = FakeVK()
     g = Game(chat_id=-1001, bot=FakeBot())
     g.add_player(5001, "Жертва")
+    g.players[5001].role = Role.CITIZEN
+    g.players[5001].number = 1
+    g.state = "night"
     manager.games[g.chat_id] = g
 
     await cmd_bangame(vk, g.chat_id, 9000, "/bangame 5001 1 день\nЧиты", {})
@@ -1234,11 +1237,19 @@ async def test_bangame_bans_snackbar_and_chat_message():
     assert any("был заблокирован во вселенной игры" in t for t in texts), texts
     assert any("был заблокирован доступ к игре на 1 день" in t for t in texts), texts
     assert any("Причина: Читы" in t for t in texts), texts
+    assert not g.players[5001].alive, "игрок выкинут из игры — помечен мёртвым"
+    assert g.players[5001].banned, "пометка 'забанен' для итогов игры"
+    dm = [t for cid, t in vk.sent if cid == 5001]
+    assert any("Тебя убили" in t for t in dm), dm
 
     await event_join(vk, g, g.chat_id, 5001, 1)
     assert vk.snackbars, "баненный игрок получает снэкбар"
     assert "Вы были забанены в игре на 1 день" in vk.snackbars[-1], vk.snackbars
     assert vk.snackbars[-1].count("\n") >= 1, "причина в снэкбаре"
+
+    await g.end_game("town")
+    end_texts = chat_msgs(g)
+    assert any("забанен" in t for t in end_texts), end_texts
 
     await cmd_unbangame(vk, g.chat_id, 9000, "/unbangame 5001", {})
     assert manager.get_ban(5001) is None
@@ -1249,6 +1260,23 @@ async def test_bangame_bans_snackbar_and_chat_message():
     manager.bans.clear()
     config.DEV_ID = ""
     print("test_bangame_bans_snackbar_and_chat_message OK")
+
+
+async def test_bangame_not_in_game_gets_block_dm():
+    config.DEV_ID = "9000"
+    manager.bans.clear()
+    vk = FakeVK()
+    await cmd_bangame(vk, -1001, 9000, "/bangame 5004 1 день\nЧиты", {})
+    ban = manager.get_ban(5004)
+    assert ban is not None and ban["reason"] == "Читы", ban
+    dm = [t for cid, t in vk.sent if cid == 5004]
+    assert dm and "Тебе был заблокирован доступ в игру." in dm[-1], dm
+    assert "Срок: 1 день" in dm[-1], dm
+    assert "Причина: Читы" in dm[-1], dm
+    assert not any("Тебя убили" in t for t in dm), "вне игры — сообщение о блокировке, а не убийство"
+    manager.bans.clear()
+    config.DEV_ID = ""
+    print("test_bangame_not_in_game_gets_block_dm OK")
 
 
 async def test_bangame_forever_and_ignored_for_others():
@@ -1279,6 +1307,9 @@ async def test_bangame_reason_as_next_message():
     vk = FakeVK()
     g = Game(chat_id=-1001, bot=FakeBot())
     g.add_player(5003, "Жертва")
+    g.players[5003].role = Role.CITIZEN
+    g.players[5003].number = 1
+    g.state = "night"
     manager.games[g.chat_id] = g
 
     await cmd_bangame(vk, g.chat_id, 9000, "/bangame 5003 1 час", {})
@@ -1295,6 +1326,7 @@ async def test_bangame_reason_as_next_message():
     texts = [t for cid, t in vk.sent]
     assert any("Причина: Спам" in t for t in texts), texts
     assert any("был заблокирован доступ к игре на 1 час" in t for t in texts), texts
+    assert not g.players[5003].alive and g.players[5003].banned
 
     manager.games.pop(g.chat_id, None)
     manager.bans.clear()
@@ -1318,10 +1350,38 @@ async def test_report_to_dev():
     assert "Текст: смотри что делает?" in to_dev[-1], to_dev[-1]
 
     vk.sent.clear()
+    await _send_report(vk, 1000, "", {"from_id": 2000, "text": "смотри"})
+    to_dev = [t for cid, t in vk.sent if cid == 9000]
+    assert to_dev, "репорт на реплай работает и без своего текста"
+    assert "Нарушитель:" in to_dev[-1], to_dev[-1]
+    assert "Текст: смотри" not in to_dev[-1], "текст берётся из реплая, не из команды"
+
+    vk.sent.clear()
     await _send_report(vk, 1000, "", {})
     assert not vk.sent, "пустой репорт без реплая не отправляется"
     config.DEV_ID = ""
     print("test_report_to_dev OK")
+
+
+async def test_report_reply_end_to_end():
+    config.DEV_ID = "9000"
+    vk = FakeVK()
+    await handle_message_new(
+        vk,
+        {
+            "message": {
+                "peer_id": -1001,
+                "from_id": 9000,
+                "text": "/report",
+                "reply_message": {"from_id": 2000, "text": "смотри что делает"},
+            }
+        },
+    )
+    to_dev = [t for cid, t in vk.sent if cid == 9000]
+    assert to_dev and "Нарушитель:" in to_dev[-1], to_dev
+    assert "Реплай: смотри что делает" in to_dev[-1], to_dev[-1]
+    config.DEV_ID = ""
+    print("test_report_reply_end_to_end OK")
 
 
 def test_dev_badge():
@@ -1377,9 +1437,11 @@ async def main():
     await test_kamikaze_revenge_saved_by_doctor()
     test_parse_ban_duration()
     await test_bangame_bans_snackbar_and_chat_message()
+    await test_bangame_not_in_game_gets_block_dm()
     await test_bangame_forever_and_ignored_for_others()
     await test_bangame_reason_as_next_message()
     await test_report_to_dev()
+    await test_report_reply_end_to_end()
     test_dev_badge()
     print("\nALL TESTS PASSED")
 
