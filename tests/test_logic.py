@@ -259,14 +259,14 @@ async def test_mafia_unanimous_overrides_don():
     })
     await night_flow(g, {
         1000: ("target", 1012),  # дон хочет 1012
-        1001: ("target", 1009),  # вся мафия единогласно — 1009
+        1001: ("target", 1009),  # мафия единогласно — 1009
         1002: ("target", 1009),
         1003: ("target", 1009),
         1004: ("target", 1009),
         1005: ("skip",), 1006: ("skip",), 1007: ("skip",), 1008: ("skip",),
     })
-    assert not g.players[1009].alive, "единогласная мафия из 4 человек перебивает дона"
-    assert g.players[1012].alive, "выбор дона перебит"
+    assert not g.players[1012].alive, "дон выбирает жертву — его решение решает"
+    assert g.players[1009].alive, "голоса мафии не перебивают выбор дона"
     print("test_mafia_unanimous_overrides_don OK")
 
 
@@ -360,7 +360,7 @@ async def test_mafia_decision_messages():
         1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
     })
     m = "\n".join(chat_msgs(g))
-    assert "🤵🏻 Дон не хочет ничего решать." in m, m
+    assert "🤵🏻 Дон не хочет участвовать." in m, m
     assert "🤵🏼 Мафия выбрала жертву" not in m, "без решения мафии сообщение о жертве не пишется"
     assert g.players[1007].alive and g.players[1008].alive
 
@@ -413,9 +413,9 @@ async def test_don_afk_single_mafia_choice_counts():
         1002: ("skip",),  # вторая промолчала
         1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
     })
-    assert not g.players[1007].alive, "дон не выбрал — голос идёт мафии, которая выбрала"
+    assert not g.players[1007].alive, "дон не выбрал — убивает по голосам мафии"
     m = "\n".join(chat_msgs(g))
-    assert "🤵🏻 Дон не хочет ничего решать." not in m, "убийство состоялось — сообщение не нужно"
+    assert "🤵🏻 Дон не хочет участвовать." not in m, "убийство состоялось — сообщение не нужно"
     print("test_don_afk_single_mafia_choice_counts OK")
 
 
@@ -430,7 +430,7 @@ async def test_mafia_skip_triggers_don_message():
         1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
     })
     m = "\n".join(chat_msgs(g))
-    assert "🤵🏻 Дон не хочет ничего решать." in m, m
+    assert "🤵🏻 Дон не хочет участвовать." in m, m
     assert "🤵🏼 Мафия выбрала жертву" not in m, "никто не убит — сообщения о жертве нет"
     print("test_mafia_skip_triggers_don_message OK")
 
@@ -517,7 +517,7 @@ async def test_guest_message_shows_don_when_don_decides():
     print("test_guest_message_shows_don_when_don_decides OK")
 
 
-async def test_guest_message_shows_mafia_when_don_skips():
+async def test_guest_message_never_shows_mafia_when_don_skips():
     g = make_game({
         1000: Role.DON, 1001: Role.MAFIA, 1002: Role.MAFIA,
         1003: Role.COMMISSAR, 1004: Role.DOCTOR, 1005: Role.MISTRESS,
@@ -528,11 +528,33 @@ async def test_guest_message_shows_mafia_when_don_skips():
         1001: ("target", 1007), 1002: ("target", 1007),
         1003: ("skip",), 1004: ("skip",), 1005: ("skip",), 1006: ("skip",),
     })
-    assert not g.players[1007].alive, "при пропуске дона мафия убивает"
+    assert not g.players[1007].alive, "при афк доне мафия решает большинством"
     guests = [l for l in "\n".join(chat_msgs(g)).splitlines() if "в гостях был" in l]
-    assert any("🤵🏼 Мафия" in l for l in guests), guests
-    assert not any("🤵🏻 Дон" in l for l in guests), guests
-    print("test_guest_message_shows_mafia_when_don_skips OK")
+    assert any("🤵🏻 Дон" in l for l in guests), guests
+    assert not any("Мафия" in l for l in guests), "в гостях никогда не пишется Мафия"
+    print("test_guest_message_never_shows_mafia_when_don_skips OK")
+
+
+async def test_don_afk_mafia_plurality_kills_most_voted():
+    g = make_game({
+        1000: Role.DON,
+        1001: Role.MAFIA, 1002: Role.MAFIA, 1003: Role.MAFIA, 1004: Role.MAFIA,
+        1005: Role.COMMISSAR, 1006: Role.DOCTOR, 1007: Role.MISTRESS, 1008: Role.LAWYER,
+        1009: Role.CITIZEN, 1010: Role.CITIZEN,
+    })
+    await night_flow(g, {
+        1000: ("skip",),  # дон афк
+        1001: ("target", 1009),  # 1009 — 3 голоса
+        1002: ("target", 1009),
+        1003: ("target", 1009),
+        1004: ("target", 1010),  # 1010 — 1 голос
+        1005: ("skip",), 1006: ("skip",), 1007: ("skip",), 1008: ("skip",),
+    })
+    assert not g.players[1009].alive, "дон афк — убивает того, за кого больше голосов мафии"
+    assert g.players[1010].alive, "меньшинство не убивает"
+    guests = [l for l in "\n".join(chat_msgs(g)).splitlines() if "в гостях был" in l]
+    assert any("🤵🏻 Дон" in l for l in guests), guests
+    print("test_don_afk_mafia_plurality_kills_most_voted OK")
 
 
 async def test_lynch_confirm_updates_counts():

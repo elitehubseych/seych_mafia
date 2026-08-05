@@ -30,7 +30,7 @@ CHAT_ACTIONS = {
     ),
     Role.DON: (
         f"{ROLE_EMOJI[Role.MAFIA]} Мафия выбрала жертву.",
-        f"{ROLE_EMOJI[Role.DON]} Дон не хочет ничего решать.",
+        f"{ROLE_EMOJI[Role.DON]} Дон не хочет участвовать.",
     ),
 }
 
@@ -848,30 +848,27 @@ class Game:
                 kam_act = a
                 break
 
-        mafia_choices = [a.target for m in mafias if (a := act.get(m.user_id)) and a.target]
-        mafia_target = mafia_choices[0] if mafia_choices and len(set(mafia_choices)) == 1 else None
-        mafia_all_voted = bool(mafias) and len(mafia_choices) == len(mafias)
+        mafia_counts: Counter = Counter()
+        for m in mafias:
+            a = act.get(m.user_id)
+            if a and a.target:
+                mafia_counts[a.target] += 1
+        mafia_top_target, mafia_top_count = None, 0
+        mafia_top_tie = False
+        if mafia_counts:
+            mafia_top_target, mafia_top_count = mafia_counts.most_common(1)[0]
+            mafia_top_tie = sum(1 for c in mafia_counts.values() if c == mafia_top_count) > 1
 
         don_target = don_act.target if don_act else None
         mistress_blocks_don = bool(mis_act and mis_act.target == (don.user_id if don else None))
         mistress_blocks_com = bool(mis_act and mis_act.target == (commissar.user_id if commissar else None))
 
         kill_target = None
-        killer_is_don = False
         if not mistress_blocks_don:
             if don_target is not None:
-                if (
-                    mafia_all_voted
-                    and mafia_target is not None
-                    and mafia_target != don_target
-                    and len(mafias) >= 4
-                ):
-                    kill_target = mafia_target
-                else:
-                    kill_target = don_target
-                    killer_is_don = True
-            else:
-                kill_target = mafia_target
+                kill_target = don_target
+            elif mafia_top_target is not None and not mafia_top_tie:
+                kill_target = mafia_top_target
 
         if kill_target:
             await self.broadcast(CHAT_ACTIONS[Role.DON][0])
@@ -891,7 +888,7 @@ class Game:
 
         hits: dict[int, list[str]] = {}
         if kill_target:
-            hits.setdefault(kill_target, []).append("don" if killer_is_don else "mafia")
+            hits.setdefault(kill_target, []).append("don")
         if com_target:
             hits.setdefault(com_target, []).append("com")
         if mani_target:
@@ -931,14 +928,8 @@ class Game:
                         seen.add(killer.user_id)
                         killers.append(killer)
 
-                if don and don_act and don_act.target == uid:
+                if kill_target == uid:
                     add_killer(don)
-                elif mafia_all_voted and mafia_target == uid:
-                    killer_mafia = next(
-                        (m for m in mafias if (a := act.get(m.user_id)) and a.target == uid),
-                        None,
-                    )
-                    add_killer(killer_mafia)
                 if com_target == uid:
                     add_killer(commissar)
                 if mani_target == uid:
@@ -979,8 +970,6 @@ class Game:
                 killer_roles = []
                 if "don" in kinds:
                     killer_roles.append(f"{ROLE_EMOJI[Role.DON]} {ROLE_RU[Role.DON]}")
-                if "mafia" in kinds:
-                    killer_roles.append(f"{ROLE_EMOJI[Role.MAFIA]} {ROLE_RU[Role.MAFIA]}")
                 if "com" in kinds:
                     killer_roles.append(f"{ROLE_EMOJI[Role.COMMISSAR]} {ROLE_RU[Role.COMMISSAR]}")
                 if "maniac" in kinds:
