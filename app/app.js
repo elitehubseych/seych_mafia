@@ -14,6 +14,7 @@
     roomCode: $("roomCode"),
     stateBadge: $("stateBadge"),
     nightLabel: $("nightLabel"),
+    connBanner: $("connBanner"),
     table: $("table"),
     timeline: $("timeline"),
     timelineInner: $("timelineInner"),
@@ -39,6 +40,7 @@
   var pollTimer = null;
   var lastTimelineId = 0;
   var selection = null;
+  var everConnected = false;
 
   var ROLE_DESC = {
     don: "Ты Дон — Глава мафии! Вместе с семьёй ночью выбираешь жертву и исполняешь приговор.",
@@ -161,7 +163,13 @@
           showError(data.error);
         }
       })
-      .catch(function (e) { console.warn("state fetch failed", e); });
+      .catch(function (e) {
+        console.warn("state fetch failed", e);
+        setConn(
+          "Нет связи с бэкендом: " + (e && e.message ? e.message : e) +
+          ". Открой приложение по ссылке из /startapp (из ВК), а не напрямую."
+        );
+      });
   }
 
   function postAction(action, payload) {
@@ -194,7 +202,12 @@
       try { data = JSON.parse(ev.data); } catch (e) { return; }
       if (data && data.room_id) applyState(data);
     };
-    ws.onclose = function () { scheduleReconnect(); };
+    ws.onclose = function () {
+      if (!everConnected) {
+        setConn("Нет связи с сервером (WebSocket). Проверь интернет и что файлы app.js свежие.");
+      }
+      scheduleReconnect();
+    };
     ws.onerror = function () { try { ws.close(); } catch (e) {} };
     clearInterval(pollTimer);
     pollTimer = setInterval(fetchState, 25000);
@@ -209,6 +222,8 @@
   function applyState(s) {
     var prev = state;
     state = s;
+    everConnected = true;
+    setConn(null);
     renderHeader();
     renderSeats();
     renderTimeline();
@@ -645,6 +660,15 @@
     } else {
       toast(msg, false);
     }
+  }
+
+  function setConn(msg) {
+    if (!msg) {
+      els.connBanner.classList.add("hidden");
+      return;
+    }
+    els.connBanner.textContent = msg;
+    els.connBanner.classList.remove("hidden");
   }
 
   init();

@@ -54,6 +54,21 @@ header {
 .badge.ended { background: #3b1212; color: #ff9b9b; }
 .night-label { font-size: 13px; color: var(--muted); }
 
+/* connection error banner */
+.conn-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 55;
+  background: rgba(255, 60, 60, .95);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  padding: 7px 12px;
+  line-height: 1.35;
+  box-shadow: 0 4px 14px rgba(0,0,0,.4);
+}
+
 /* ------------------------------------------------ table */
 #tableWrap { flex: 1 1 auto; min-height: 0; display: flex; padding: 10px; }
 .table {
