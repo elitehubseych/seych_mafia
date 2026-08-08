@@ -126,9 +126,26 @@
     return sp;
   }
 
+  function apiBase() {
+    var m = location.search.match(/[?&]api=([^&]+)/);
+    if (m) return decodeURIComponent(m[1]).replace(/\/+$/, "");
+    return location.origin;
+  }
+
+  function apiUrl(path, query) {
+    var u = apiBase() + path;
+    if (query) u += "?" + query.toString();
+    return u;
+  }
+
+  function apiWsUrl(query) {
+    var base = apiBase().replace(/^https:/, "ws").replace(/^http:/, "ws");
+    return base + "/app/ws?" + query.toString();
+  }
+
   function fetchState() {
     if (!roomId) return Promise.resolve();
-    return fetch("/app/state?" + buildQuery().toString())
+    return fetch(apiUrl("/app/state", buildQuery()))
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (data && data.room_id) {
@@ -142,7 +159,7 @@
 
   function postAction(action, payload) {
     if (!roomId) return;
-    fetch("/app/action", {
+    fetch(apiUrl("/app/action"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ room_id: roomId, action: action, payload: payload || {}, params: params }),
@@ -163,8 +180,7 @@
   function connectWS() {
     clearTimeout(wsTimer);
     if (!roomId) return;
-    var proto = location.protocol === "https:" ? "wss" : "ws";
-    var url = proto + "://" + location.host + "/app/ws?" + buildQuery().toString();
+    var url = apiWsUrl(buildQuery());
     try { ws = new WebSocket(url); } catch (e) { scheduleReconnect(); return; }
     ws.onmessage = function (ev) {
       var data;
