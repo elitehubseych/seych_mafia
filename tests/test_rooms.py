@@ -4,10 +4,13 @@
     .venv\\Scripts\\python -m pytest tests -q -o asyncio_mode=auto
 """
 
+import base64
 import hashlib
+import hmac
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -190,10 +193,15 @@ async def test_room_actions_and_timeline():
 
 async def test_verify_sign():
     config.VK_APP_SECRET = "SECRET"
-    params = {"vk_user_id": "42", "vk_app_id": "123", "sign": ""}
-    items = sorted((k, v) for k, v in params.items() if k != "sign" and k.startswith("vk_"))
-    payload = "&".join(f"{k}={v}" for k, v in items)
-    params["sign"] = hashlib.md5((payload + config.VK_APP_SECRET).encode()).hexdigest()
+    params = {"vk_user_id": "42", "vk_app_id": "123"}
+    vk_keys = sorted(k for k in params if k.startswith("vk_"))
+    query = urlencode({k: params[k] for k in vk_keys}, doseq=True)
+    digest = hmac.new(
+        config.VK_APP_SECRET.encode("utf-8"),
+        query.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    params["sign"] = base64.urlsafe_b64encode(digest).decode().rstrip("=")
     assert _verify_sign(params)
 
     params["sign"] = "deadbeef"

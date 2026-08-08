@@ -56,29 +56,51 @@
   };
 
   // ---------------------------------------------------------------- bootstrap
-  function getLaunchParams() {
+  function parseUrlParams() {
     var p = {};
-    if (window.vkBridge) {
-      try {
-        window.vkBridge.send("VKWebAppInit").then(function () {
-          return window.vkBridge.send("VKWebAppGetLaunchParams");
-        }).then(function (lp) {
-          Object.assign(p, lp.launch_params || lp || {});
-        }).catch(function () {});
-      } catch (e) { /* bridge not ready */ }
-    }
+    try {
+      new URLSearchParams(location.search).forEach(function (v, k) { if (!(k in p)) p[k] = v; });
+      // VK передаёт всё, что после "#" в ссылке, как query-параметр "hash"
+      if (p.hash && !p.room_id) {
+        try { new URLSearchParams(p.hash).forEach(function (v, k) { if (!(k in p)) p[k] = v; }); } catch (e) {}
+      }
+    } catch (e) {}
     try {
       var hash = location.hash.replace(/^#/, "");
       if (hash) new URLSearchParams(hash).forEach(function (v, k) { if (!(k in p)) p[k] = v; });
-    } catch (e) { /* ignore */ }
-    try {
-      new URLSearchParams(location.search).forEach(function (v, k) { if (!(k in p)) p[k] = v; });
-    } catch (e) { /* ignore */ }
+    } catch (e) {}
     return p;
   }
 
+  function mergeParams(p, more) {
+    for (var k in more) {
+      if (Object.prototype.hasOwnProperty.call(more, k) && !(k in p)) p[k] = more[k];
+    }
+  }
+
+  function tryAutoEnter() {
+    var code = (params.room_id || "").trim().toUpperCase();
+    if (code && !roomId) enterRoom(code);
+  }
+
+  function fetchBridgeLaunchParams() {
+    if (!window.vkBridge || params.room_id) return;
+    try {
+      window.vkBridge.send("VKWebAppInit").then(function () {
+        return window.vkBridge.send("VKWebAppGetLaunchParams");
+      }).then(function (lp) {
+        var more = lp && lp.launch_params ? lp.launch_params : (lp || {});
+        mergeParams(params, more);
+        if (more.hash && !params.room_id) {
+          try { mergeParams(params, new URLSearchParams(more.hash)); } catch (e) {}
+        }
+        tryAutoEnter();
+      }).catch(function () {});
+    } catch (e) { /* bridge not ready */ }
+  }
+
   function init() {
-    params = getLaunchParams();
+    params = parseUrlParams();
     els.codeGo.addEventListener("click", submitCode);
     els.codeInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter") submitCode();
@@ -89,12 +111,9 @@
     });
     els.selfCard.addEventListener("click", onSelfClick);
 
-    var fromUrl = (params.room_id || "").trim().toUpperCase();
-    if (fromUrl) {
-      enterRoom(fromUrl);
-    } else {
-      els.enterScreen.classList.remove("hidden");
-    }
+    tryAutoEnter();
+    fetchBridgeLaunchParams();
+    if (!roomId) els.enterScreen.classList.remove("hidden");
 
     setTimeout(function () {
       var stored = localStorage.getItem("mafia_last_room");

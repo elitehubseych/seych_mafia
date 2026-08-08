@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 import logging
+from urllib.parse import urlencode
 
 import aiohttp
 from aiohttp import web
@@ -39,9 +41,16 @@ def _verify_sign(params: dict) -> bool:
         return config.APP_ALLOW_UNSIGNED
     if not config.VK_APP_SECRET:
         return False
-    items = sorted((k, v) for k, v in params.items() if k != "sign" and k.startswith("vk_"))
-    payload = "&".join(f"{k}={v}" for k, v in items)
-    expected = hashlib.md5((payload + config.VK_APP_SECRET).encode("utf-8")).hexdigest()
+    vk_keys = sorted(k for k in params if k.startswith("vk_"))
+    if not vk_keys:
+        return False
+    query = urlencode({k: params[k] for k in vk_keys}, doseq=True)
+    digest = hmac.new(
+        config.VK_APP_SECRET.encode("utf-8"),
+        query.encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    expected = base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
     return hmac.compare_digest(expected, sign)
 
 
