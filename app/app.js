@@ -1,6 +1,13 @@
 (function () {
   "use strict";
 
+  // ---------- НАСТРОЙКА ----------
+  // Бэкенд (Render), куда фронтенд шлёт запросы.
+  // Если заливаешь эти файлы на свой сайт — оставь адрес Render.
+  // Если фронтенд лежит на самом Render — можно поставить "" (тот же домен).
+  var API_BASE = "https://seych-ai.onrender.com";
+  // --------------------------------
+
   var $ = function (id) { return document.getElementById(id); };
 
   var els = {
@@ -129,7 +136,7 @@
   function apiBase() {
     var m = location.search.match(/[?&]api=([^&]+)/);
     if (m) return decodeURIComponent(m[1]).replace(/\/+$/, "");
-    return location.origin;
+    return API_BASE || location.origin;
   }
 
   function apiUrl(path, query) {
