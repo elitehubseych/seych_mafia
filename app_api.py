@@ -4,7 +4,6 @@ import hashlib
 import hmac
 import json
 import logging
-from pathlib import Path
 
 import aiohttp
 from aiohttp import web
@@ -13,8 +12,6 @@ import config
 from rooms import room_manager
 
 logger = logging.getLogger(__name__)
-
-APP_DIR = Path(__file__).resolve().parent / "app"
 
 ALLOWED_ORIGINS = {
     "https://vk.com",
@@ -152,16 +149,9 @@ async def ws_handler(request: web.Request) -> web.Response:
     return ws
 
 
-async def index_handler(request: web.Request) -> web.Response:
-    return web.FileResponse(APP_DIR / "index.html")
-
-
 def add_app_routes(app: web.Application) -> None:
     app.middlewares.append(cors_middleware)
     app.router.add_get("/app/ws", ws_handler)
     app.router.add_get("/app/state", state_handler)
     app.router.add_post("/app/action", action_handler)
-    app.router.add_get("/app/", index_handler)
-    if APP_DIR.is_dir():
-        app.router.add_static("/app", APP_DIR, show_index=False)
-    logger.info("Mini-app routes registered (static dir: %s)", APP_DIR)
+    logger.info("Mini-app API routes registered (frontend раздаётся с внешнего хостинга)")
