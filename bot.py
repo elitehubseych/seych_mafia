@@ -11,8 +11,10 @@ import aiohttp
 from aiohttp import web
 
 import config
+from app_api import add_app_routes
 from game_manager import manager
 from handlers import handle_message_event, handle_message_new
+from rooms import room_manager
 from vk_api import vk
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -95,6 +97,12 @@ async def _keepalive_loop(url: str) -> None:
             logger.warning("keepalive ping failed: %s", e)
 
 
+async def _room_sweep() -> None:
+    while True:
+        await asyncio.sleep(600)
+        room_manager.sweep()
+
+
 async def _app_main() -> None:
     logger.info("Starting bot (commit %s, VK API %s)", _deployed_commit(), config.VK_API_VERSION)
     loop = asyncio.get_running_loop()
@@ -106,9 +114,11 @@ async def _app_main() -> None:
         await manager.db.close()
 
     app.on_cleanup.append(_close_resources)
+    add_app_routes(app)
     app.router.add_post(config.CALLBACK_PATH, callback_handler)
     app.router.add_post("/{tail:.*}", callback_handler)
     app.router.add_get("/health", lambda r: web.Response(text="ok"))
+    loop.create_task(_room_sweep())
     keepalive_url = (os.getenv("RENDER_EXTERNAL_URL") or os.getenv("KEEPALIVE_URL") or "").strip()
     if keepalive_url:
         loop.create_task(_keepalive_loop(keepalive_url))

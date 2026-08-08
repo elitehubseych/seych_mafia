@@ -25,6 +25,23 @@ def is_dev(user_id: int) -> bool:
     except (TypeError, ValueError):
         return False
 
+VK_APP_ID = os.getenv("VK_APP_ID", "").strip()
+VK_APP_SECRET = os.getenv("VK_APP_SECRET", "").strip()
+# Базовый URL мини-аппа (Render, где живёт бот) для проверки подписи не нужен,
+# но нужен для ссылки на фронтенд и CORS.
+APP_BASE_URL = os.getenv("APP_BASE_URL", "").strip()
+# Разрешённые Origin для мини-аппа (перечислить через запятую, если фронтенд на другом хосте).
+APP_CORS_ORIGINS = [o.strip() for o in os.getenv("APP_CORS_ORIGINS", "").split(",") if o.strip()]
+# Разрешить вход в мини-апп без подписи launch-params (для отладки в браузере).
+APP_ALLOW_UNSIGNED = os.getenv("APP_ALLOW_UNSIGNED", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def mini_app_link(room_id: str) -> str:
+    if VK_APP_ID:
+        return f"https://vk.com/app{VK_APP_ID}#room_id={room_id}"
+    return f"{APP_BASE_URL}/app/#room_id={room_id}"
+
+
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_PASSWORD = (

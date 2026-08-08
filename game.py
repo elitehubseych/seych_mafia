@@ -78,6 +78,7 @@ class Game:
         self._bot_ids: set[int] = set()
         self._night_groups: list[tuple[Role, list[int]]] = []
         self.last_words_open: set[int] = set()
+        self.winner: str | None = None
 
     # ------------------------------------------------------------------ utils
     @property
@@ -1297,6 +1298,7 @@ class Game:
 
     async def end_game(self, winner: str) -> None:
         self.state = "ended"
+        self.winner = winner
         for t in (self._night_timer, self._vote_timer, self._reg_timer, self._bots_task, self._confirm_task):
             _cancel(t)
         if winner == "mafia":

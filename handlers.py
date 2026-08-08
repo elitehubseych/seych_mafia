@@ -8,8 +8,9 @@ from datetime import datetime, timedelta, timezone
 import config
 from game import Game
 from game_manager import manager
-from keyboards import bot_dm_kb, join_kb
+from keyboards import bot_dm_kb, join_kb, startapp_kb
 from roles import MAFIA_SIDE, Role
+from rooms import room_manager
 from vk_api import VKAPI
 
 logger = logging.getLogger(__name__)
@@ -345,6 +346,8 @@ async def handle_chat_command(
     reply = reply or {}
     if cmd in {"/start", "/новость", "/начать"} and len(parts) == 1:
         await cmd_start_group(vk, peer_id, user_id, game)
+    elif cmd in {"/startapp", "/графика"}:
+        await cmd_startapp(vk, peer_id, user_id, game)
     elif cmd == "/startadmin":
         await cmd_startadmin(vk, peer_id, user_id, game)
     elif cmd == "/startbot":
@@ -400,6 +403,40 @@ async def cmd_start_group(
     sent = await vk.send(peer_id, "\n".join(lines), keyboard=join_kb())
     game.registration_message_id = sent
     game._reg_timer = asyncio.create_task(game.start_registration_timer())
+
+
+async def cmd_startapp(
+    vk: VKAPI, peer_id: int, user_id: int, game: Game | None
+) -> None:
+    room = room_manager.for_chat(peer_id)
+    if room and room.game.state == "waiting":
+        await vk.send(
+            peer_id,
+            f"🎮 Комната уже открыта!\nКод: {room.room_id}\n"
+            f"Ссылка: {config.mini_app_link(room.room_id)}",
+        )
+        return
+    if game and game.state not in {"waiting", "ended"}:
+        await vk.send(peer_id, "🎭 Сначала закончи текущую игру.")
+        return
+    if room:
+        room_manager.remove(room.room_id)
+    room = room_manager.create(peer_id, user_id, vk)
+    manager.games[peer_id] = room.game
+    g = room.game
+    link = config.mini_app_link(room.room_id)
+    lines = [
+        "🎮 Открыта графическая комната Мафии!",
+        "",
+        f"Код комнаты: {room.room_id}",
+        f"Ссылка: {link}",
+        "",
+        "Открой ссылку в приложении ВК, чтобы сесть за стол.",
+        "Кнопка ниже тоже зарегистрирует тебя в игре.",
+    ]
+    sent = await vk.send(peer_id, "\n".join(lines), keyboard=startapp_kb(link))
+    g.registration_message_id = sent
+    g._reg_timer = asyncio.create_task(g.start_registration_timer())
 
 
 async def cmd_startadmin(
@@ -646,6 +683,7 @@ async def event_join(
 HELP_TEXT = (
     "🎭 Бот Мафия\n\n"
     "• /start — начать регистрацию в чате\n"
+    "• /startapp — открыть графическую комнату (мини-апп)\n"
     "• /setnick Ник — сменить никнейм (в ЛС)\n"
     "• /rep текст — отправить жалобу разработчику (можно ответом на сообщение)\n"
     "• /startadmin — принудительно начать игру (админ)\n"

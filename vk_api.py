@@ -233,6 +233,13 @@ class VKAPI:
                 return name
         return f"Игрок{user_id}"
 
+    async def get_user_avatar(self, user_id: int, size: int = 200) -> str:
+        resp = await self.call("users.get", user_ids=user_id, fields="photo_200")
+        if not resp:
+            return ""
+        u = resp[0]
+        return u.get("photo_200") or ""
+
     @staticmethod
     def _to_json(keyboard) -> str:
         if isinstance(keyboard, str):

@@ -87,6 +87,24 @@ def join_kb() -> dict:
     }
 
 
+def startapp_kb(link: str) -> dict:
+    return {
+        "inline": True,
+        "buttons": [
+            [
+                {
+                    "action": {
+                        "type": "open_link",
+                        "label": "🎮 Играть в приложении",
+                        "link": link,
+                    }
+                }
+            ],
+            [_btn("➕ Присоединиться", {"t": "join"}, color="positive")],
+        ],
+    }
+
+
 def bot_dm_kb() -> dict:
     return {
         "inline": True,
